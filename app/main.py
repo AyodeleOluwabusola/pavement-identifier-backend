@@ -1,11 +1,18 @@
 from fastapi import FastAPI
-from app.api.endpoints import users, items
+from core.config import settings
 
-app = FastAPI()
-
-app.include_router(users.router, prefix="/users", tags=["users"])
-app.include_router(items.router, prefix="/items", tags=["items"])
+app = FastAPI(title=settings.APP_NAME)
 
 @app.get("/")
 def home():
     return {"message": "Welcome to Pavement Identifier!"}
+
+
+@app.get("/config")
+def get_config():
+    return {
+        "APP_NAME": settings.APP_NAME,
+        "DEBUG": settings.DEBUG,
+        "DATABASE_URL": settings.DATABASE_URL,
+        "RABBITMQ_URL": settings.RABBITMQ_URL
+    }
