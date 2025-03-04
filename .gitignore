@@ -1,2 +1,3 @@
 __pycache__/
 celerybeat-schedule.db
+.idea/vcs.xml
