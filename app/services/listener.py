@@ -1,6 +1,6 @@
 import os
 import json
-from threading import Lock
+from threading import Lock, Thread
 import pika
 import openpyxl
 from openpyxl import Workbook
@@ -47,16 +47,26 @@ def write_to_excel(file_name, status, grade):
         # Save the Excel workbook
         workbook.save(file_path)
 
-def start_listener():
-    connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
+def start_consumer():
+    connection = pika.BlockingConnection(pika.ConnectionParameters(host=settings.RABBITMQ_HOST))
     channel = connection.channel()
     channel.queue_declare(queue=settings.QUEUE_NAME, durable=True)
     
-    # Set QoS to process one message at a time
+    # Set QoS to process up to 3 messages at a time
     channel.basic_qos(prefetch_count=3)
-    
-    channel.basic_consume(queue='image_queue', on_message_callback=callback)
+
+    channel.basic_consume(queue=settings.QUEUE_NAME, on_message_callback=callback)
     
     print('Waiting for messages. To exit press CTRL+C')
     channel.start_consuming()
+
+def start_listener(num_consumers=3):
+    threads = []
+    for _ in range(num_consumers):
+        thread = Thread(target=start_consumer)
+        thread.start()
+        threads.append(thread)
+    
+    for thread in threads:
+        thread.join()
 

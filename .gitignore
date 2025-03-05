@@ -5,3 +5,4 @@ celerybeat-schedule.db
 .venv/
 /app/image_processing_results.xlsx
 /app/test-image
+.DS_Store
