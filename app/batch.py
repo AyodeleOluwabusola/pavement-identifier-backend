@@ -1,5 +1,4 @@
 import os
-from app.core.celery_config import celery
 from app.services.rabbitmq_service import publish_message
 from app.services.file_service import read_image
 import logging
@@ -8,7 +7,7 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-@celery.task
+
 def process_images_from_dir(directory_path: str):
     # List all image files in the directory
     logger.info(f"Executing process_images_from_dir: {directory_path}")

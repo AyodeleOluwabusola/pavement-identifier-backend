@@ -1,8 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI
 from app.core.config import settings
 from app.batch import process_images_from_dir
 from app.services.file_service import read_image
 from app.services.rabbitmq_service import publish_message
+from app.services.listener import start_listener 
+
 
 app = FastAPI(title=settings.APP_NAME)
 
@@ -21,10 +24,12 @@ def get_config():
     }
 
 
+executor = ThreadPoolExecutor(max_workers=4)
+
 @app.post("/publish-images-from-dir/")
 async def publish_images_from_directory(directory_path: str):
     # Call the Celery task to process all images in the directory
-    process_images_from_dir.apply_async(args=[directory_path])
+    executor.submit(process_images_from_dir, directory_path)
     return {"message": "Batch image processing from directory started as a background job."}
 
 def background_publish_images_from_dir(directory_path: str):
