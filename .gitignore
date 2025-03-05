@@ -1,5 +1,7 @@
 __pycache__/
 celerybeat-schedule.db
 .idea/vcs.xml
-
+.vscode/
 .venv/
+/app/image_processing_results.xlsx
+/app/test-image

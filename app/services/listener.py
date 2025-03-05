@@ -5,6 +5,7 @@ import pika
 import openpyxl
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor
+from app.core.config import settings # Add this line to import settings
 
 lock = Lock()
 
@@ -49,7 +50,7 @@ def write_to_excel(file_name, status, grade):
 def start_listener():
     connection = pika.BlockingConnection(pika.ConnectionParameters(host='localhost'))
     channel = connection.channel()
-    channel.queue_declare(queue='image_queue')
+    channel.queue_declare(queue=settings.QUEUE_NAME, durable=True)
     
     # Set QoS to process one message at a time
     channel.basic_qos(prefetch_count=3)
@@ -58,3 +59,4 @@ def start_listener():
     
     print('Waiting for messages. To exit press CTRL+C')
     channel.start_consuming()
+

@@ -5,7 +5,7 @@ from app.batch import process_images_from_dir
 from app.services.file_service import read_image
 from app.services.rabbitmq_service import publish_message
 from app.services.listener import start_listener 
-
+import threading
 
 app = FastAPI(title=settings.APP_NAME)
 
@@ -22,6 +22,12 @@ def get_config():
         "DATABASE_URL": settings.DATABASE_URL,
         "RABBITMQ_URL": settings.RABBITMQ_URL
     }
+
+@app.on_event("startup")
+async def startup_event():
+    # Start the RabbitMQ listener in a separate thread
+    listener_thread = threading.Thread(target=start_listener)
+    listener_thread.start()
 
 
 executor = ThreadPoolExecutor(max_workers=4)
