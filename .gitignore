@@ -6,3 +6,6 @@ celerybeat-schedule.db
 /app/image_processing_results.xlsx
 /app/test-image
 .DS_Store
+.idea/misc.xml
+.idea/pavement-identifier-backend.iml
+.idea/modules.xml
