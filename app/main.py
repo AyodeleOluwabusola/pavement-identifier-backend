@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.batch import process_images_from_dir
 from app.services.file_service import read_image
 from app.services.rabbitmq_service import publish_message
-from app.services.listener import start_listener 
+from app.services.listener import start_listener
 import threading
 
 app = FastAPI(title=settings.APP_NAME)

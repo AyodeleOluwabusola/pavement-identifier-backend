@@ -17,4 +17,5 @@ def publish_message(message: dict):
         body=json.dumps(message),
         properties=pika.BasicProperties(delivery_mode=2)
     )
+    print(" [x] Sent message")
     connection.close()
