@@ -7,8 +7,7 @@ from typing import Optional, Dict, Any, Tuple, List
 import pika
 import openpyxl
 from openpyxl import Workbook
-from concurrent.futures import ThreadPoolExecutor, Future
-from app.core.config import settings
+from concurrent.futures import ThreadPoolExecutor
 import torch
 from torchvision import transforms
 from io import BytesIO
@@ -16,7 +15,6 @@ from PIL import Image
 import mlflow
 import mlflow.pytorch
 import time
-from contextlib import contextmanager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,7 +24,7 @@ class PavementClassifier:
     def __init__(self):
         self.executor = ThreadPoolExecutor(max_workers=3)
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("mps" if torch.mps.is_available() else "cpu")
         self.lock = Lock()
         self.classes = ['asphalt', 'chip-sealed', 'gravel']
         self.model_uri = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
@@ -77,11 +75,8 @@ class PavementClassifier:
                 self.model_uri,
                 map_location=self.device
             )
-            # self.model = mlflow.pyfunc.load_model(self.model_uri)
-            # print("Model dependencies ", mlflow.pyfunc.get_model_dependencies(self.model_uri))
             self.model.to(self.device)
             self.model.eval()
-            logger.info("Model loaded successfully")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
             raise
@@ -94,6 +89,7 @@ class PavementClassifier:
         """Transform image for model input"""
         try:
             if image_path:
+                logger.info(f"Opening image from path: {image_path}")
                 img = Image.open(image_path)
             else:
                 image_data = base64.b64decode(image_base64)
@@ -101,17 +97,33 @@ class PavementClassifier:
 
             img_tensor = self.inference_transform(img)
             img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
-            return img_tensor.to(self.device)
+            return img_tensor
 
         except Exception as e:
             logger.error(f"Error transforming image: {e}")
             return None
 
+    # def transform_image(image_path):
+    #     """
+    #     Preprocess an image:
+    #       - Opens the image in grayscale.
+    #       - Resizes to IMG_SIZE.
+    #       - Converts to a tensor and normalizes.
+    #       - Adds a batch dimension.
+    #     """
+    #     img = Image.open(image_path)
+    #     img = inference_transform(img)
+    #     # Add a batch dimension: resulting shape becomes (1, 1, 256, 256)
+    #     img = img.unsqueeze(0)
+    #     return img
+
     @torch.no_grad()
-    def run_inference(self, img_tensor: torch.Tensor) -> Tuple[float, int]:
+    def run_inference(self, img_tensor) -> Tuple[float, int]:
         """Run model inference"""
         try:
             logger.info(f"Running inference on image: {img_tensor}")
+            logger.info(f"Running inference on image shape: {img_tensor.shape}")
+            logger.info(f"Running inference on image device: {img_tensor.device}")
             outputs = self.model(img_tensor)
             logger.info(f"Inference results: {outputs}")
             probs = torch.softmax(outputs, dim=1)
@@ -125,6 +137,8 @@ class PavementClassifier:
         """Classify a single image"""
         try:
             img_tensor = self.transform_image(image_path, image_data)
+            logger.info(f"Before tensor to device: {img_tensor}")
+            img_tensor = img_tensor.to(self.device)
             if img_tensor is None:
                 return {
                     'Image Path': image_path,
