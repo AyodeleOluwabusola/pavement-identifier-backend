@@ -12,6 +12,7 @@ import logging
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import base64
+import torch
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +28,7 @@ task_status: Dict[str, Any] = {}
 
 # Global variable to store the consumer manager
 consumer_manager: Optional[ConsumerManager] = None
+
 
 def initialize_consumer_manager():
     """Initialize the consumer manager in a separate thread"""
