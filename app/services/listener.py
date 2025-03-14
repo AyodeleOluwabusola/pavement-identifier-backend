@@ -1,5 +1,28 @@
-import base64
+import sys
 import os
+
+# Print environment information
+print("Python version:", sys.version)
+print("Python executable:", sys.executable)
+print("Python path:", sys.path)
+print("Current working directory:", os.getcwd())
+
+try:
+    import torch
+    print("PyTorch version:", torch.__version__)
+except ImportError as e:
+    print("Failed to import torch:", e)
+    print("Checking if torch is in site-packages...")
+    python_path = sys.executable
+    site_packages = os.path.join(os.path.dirname(os.path.dirname(python_path)), 'lib/python3.11/site-packages')
+    print("Site packages location:", site_packages)
+    if os.path.exists(os.path.join(site_packages, 'torch')):
+        print("torch directory exists in site-packages")
+    else:
+        print("torch directory not found in site-packages")
+
+# Rest of your imports
+import base64
 import json
 import logging
 from threading import Lock, Thread, Event
@@ -9,7 +32,6 @@ import openpyxl
 from openpyxl import Workbook
 from concurrent.futures import ThreadPoolExecutor, Future
 from app.core.config import settings
-import torch
 from torchvision import transforms
 from io import BytesIO
 from PIL import Image
@@ -24,9 +46,32 @@ logger = logging.getLogger(__name__)
 
 class PavementClassifier:
     def __init__(self):
+        print("Initializing PavementClassifier...")
         self.executor = ThreadPoolExecutor(max_workers=3)
         self.model = None
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+        print("Checking device availability...")
+        # Use MPS if available (for Apple Silicon), fall back to CPU
+        try:
+            print("MPS available:", torch.backends.mps.is_available())
+            print("CUDA available:", torch.cuda.is_available())
+            
+            if torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+                print("Using MPS device")
+            elif torch.cuda.is_available():
+                self.device = torch.device("cuda")
+                print("Using CUDA device")
+            else:
+                self.device = torch.device("cpu")
+                print("Using CPU device")
+        except Exception as e:
+            print(f"Error during device selection: {e}")
+            self.device = torch.device("cpu")
+            print("Falling back to CPU device")
+            
+        print(f"Selected device: {self.device}")
+        
         self.lock = Lock()
         self.classes = ['asphalt', 'chip-sealed', 'gravel']
         self.model_uri = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
@@ -34,6 +79,7 @@ class PavementClassifier:
         self.img_size = (256, 256)
         self.is_ready = Event()
 
+        print("Setting up inference transform...")
         # Define the inference transform
         self.inference_transform = transforms.Compose([
             transforms.Lambda(lambda img: img.convert("L")),
@@ -41,6 +87,7 @@ class PavementClassifier:
             transforms.ToTensor(),
             transforms.Normalize((0.5,), (0.5,))
         ])
+        print("PavementClassifier initialization completed")
 
     def initialize(self):
         """Initialize MLflow and load model asynchronously"""
