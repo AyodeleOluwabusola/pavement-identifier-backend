@@ -9,3 +9,4 @@ celerybeat-schedule.db
 .idea/misc.xml
 .idea/pavement-identifier-backend.iml
 .idea/modules.xml
+app/.env
