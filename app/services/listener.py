@@ -1,3 +1,20 @@
+from contextlib import contextmanager
+import time
+import mlflow.pytorch
+import mlflow
+from PIL import Image
+from io import BytesIO
+from torchvision import transforms
+from app.core.config import settings
+from concurrent.futures import ThreadPoolExecutor, Future
+from openpyxl import Workbook
+import openpyxl
+import pika
+from typing import Optional, Dict, Any, Tuple, List
+from threading import Lock, Thread, Event
+import logging
+import json
+import base64
 import sys
 import os
 
@@ -14,7 +31,8 @@ except ImportError as e:
     print("Failed to import torch:", e)
     print("Checking if torch is in site-packages...")
     python_path = sys.executable
-    site_packages = os.path.join(os.path.dirname(os.path.dirname(python_path)), 'lib/python3.11/site-packages')
+    site_packages = os.path.join(os.path.dirname(
+        os.path.dirname(python_path)), 'lib/python3.11/site-packages')
     print("Site packages location:", site_packages)
     if os.path.exists(os.path.join(site_packages, 'torch')):
         print("torch directory exists in site-packages")
@@ -22,40 +40,24 @@ except ImportError as e:
         print("torch directory not found in site-packages")
 
 # Rest of your imports
-import base64
-import json
-import logging
-from threading import Lock, Thread, Event
-from typing import Optional, Dict, Any, Tuple, List
-import pika
-import openpyxl
-from openpyxl import Workbook
-from concurrent.futures import ThreadPoolExecutor, Future
-from app.core.config import settings
-from torchvision import transforms
-from io import BytesIO
-from PIL import Image
-import mlflow
-import mlflow.pytorch
-import time
-from contextlib import contextmanager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 class PavementClassifier:
     def __init__(self):
         print("Initializing PavementClassifier...")
         self.executor = ThreadPoolExecutor(max_workers=3)
         self.model = None
-        
+
         print("Checking device availability...")
         # Use MPS if available (for Apple Silicon), fall back to CPU
         try:
             print("MPS available:", torch.backends.mps.is_available())
             print("CUDA available:", torch.cuda.is_available())
-            
+
             if torch.backends.mps.is_available():
                 self.device = torch.device("mps")
                 print("Using MPS device")
@@ -69,9 +71,9 @@ class PavementClassifier:
             print(f"Error during device selection: {e}")
             self.device = torch.device("cpu")
             print("Falling back to CPU device")
-            
+
         print(f"Selected device: {self.device}")
-        
+
         self.lock = Lock()
         self.classes = ['asphalt', 'chip-sealed', 'gravel']
         self.model_uri = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
@@ -106,14 +108,17 @@ class PavementClassifier:
         for attempt in range(max_retries):
             try:
                 mlflow.set_tracking_uri("http://52.42.208.9:5000/")
-                mlflow.set_experiment("Pytorch_CNN_from_Scratch_Pavement_Surface_Classification")
+                mlflow.set_experiment(
+                    "Pytorch_CNN_from_Scratch_Pavement_Surface_Classification")
                 logger.info("MLflow connection established successfully")
                 return
             except Exception as e:
                 if attempt == max_retries - 1:
-                    logger.error(f"Failed to connect to MLflow after {max_retries} attempts: {e}")
+                    logger.error(
+                        f"Failed to connect to MLflow after {max_retries} attempts: {e}")
                     raise
-                logger.warning(f"MLflow connection attempt {attempt + 1} failed, retrying...")
+                logger.warning(
+                    f"MLflow connection attempt {attempt + 1} failed, retrying...")
                 time.sleep(2 ** attempt)
 
     def _load_model(self) -> None:
@@ -218,7 +223,8 @@ class PavementClassifier:
                     workbook = Workbook()
                     sheet = workbook.active
                     sheet.title = "Image Processing Results"
-                    sheet.append(["File Name", "Status", "Predicted Class", "Confidence"])
+                    sheet.append(
+                        ["File Name", "Status", "Predicted Class", "Confidence"])
 
                 sheet = workbook.active
                 sheet.append([
@@ -230,6 +236,7 @@ class PavementClassifier:
                 workbook.save(file_path)
             except Exception as e:
                 logger.error(f"Error writing to Excel: {e}")
+
 
 class RabbitMQConsumer:
     def __init__(self, classifier: PavementClassifier):
@@ -312,7 +319,8 @@ class RabbitMQConsumer:
             # Classify the image
             logger.info(f"Starting classification for {file_name}")
             result = self.classifier.classify_image(image_data=image_data)
-            logger.info(f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
+            logger.info(
+                f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
 
             # Write results to Excel
             if file_name and result:
@@ -321,7 +329,8 @@ class RabbitMQConsumer:
 
             # Acknowledge successful processing
             ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"Successfully processed and acknowledged message for {file_name}")
+            logger.info(
+                f"Successfully processed and acknowledged message for {file_name}")
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid message format: {e}")
@@ -346,6 +355,7 @@ class RabbitMQConsumer:
     def __del__(self):
         """Cleanup when object is destroyed"""
         self.stop()
+
 
 class ConsumerManager:
     def __init__(self, num_consumers: int = 3):
@@ -414,6 +424,7 @@ class ConsumerManager:
         """Check if the service is ready"""
         return self._ready.is_set() and any(thread.is_alive() for thread in self.consumer_threads)
 
+
 def start_listener(num_consumers: int = 3) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
@@ -424,6 +435,7 @@ def start_listener(num_consumers: int = 3) -> ConsumerManager:
     except Exception as e:
         logger.error(f"Critical error in listener: {e}")
         raise
+
 
 if __name__ == "__main__":
     start_listener()

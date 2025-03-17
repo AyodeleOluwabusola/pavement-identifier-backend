@@ -1,5 +1,6 @@
 import base64
 
+
 def read_image(file_path: str) -> str:
     try:
         with open(file_path, "rb") as image_file:

@@ -13,6 +13,7 @@ QUEUE_NAME = "image_queue"
 ROUTING_KEY = "image_routing_key"
 CONNECTION_TIMEOUT = 5  # seconds
 
+
 @contextmanager
 def get_rabbitmq_connection():
     """Context manager for handling RabbitMQ connections"""
@@ -34,6 +35,7 @@ def get_rabbitmq_connection():
         if connection and not connection.is_closed:
             connection.close()
 
+
 def publish_message(message: dict) -> bool:
     """
     Publish a message to RabbitMQ queue
@@ -42,7 +44,7 @@ def publish_message(message: dict) -> bool:
     try:
         with get_rabbitmq_connection() as connection:
             channel = connection.channel()
-            
+
             # Declare exchange and queue
             channel.exchange_declare(
                 exchange=EXCHANGE_NAME,
@@ -55,7 +57,7 @@ def publish_message(message: dict) -> bool:
                 queue=QUEUE_NAME,
                 routing_key=ROUTING_KEY
             )
-            
+
             # Publish with mandatory flag to ensure message is routable
             channel.basic_publish(
                 exchange=EXCHANGE_NAME,
@@ -67,9 +69,10 @@ def publish_message(message: dict) -> bool:
                 ),
                 mandatory=True
             )
-            logger.info(f"Successfully published message to exchange {EXCHANGE_NAME} for file: {message.get('file_name', 'unknown')}")
+            logger.info(
+                f"Successfully published message to exchange {EXCHANGE_NAME} for file: {message.get('file_name', 'unknown')}")
             return True
-            
+
     except pika.exceptions.AMQPChannelError as e:
         logger.error(f"Channel error: {e}")
         return False
