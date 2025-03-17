@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     RABBITMQ_URL: str = 'amqp://guest:guest@localhost:5672/'
     QUEUE_NAME: str = 'pavement_identifier6'
     RABBITMQ_HOST: str = 'localhost'
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = 'guest'
+    RABBITMQ_PASSWORD: str = 'guest'
+    RABBITMQ_VHOST: str = '/'
 
     # Add AWS credentials settings
     AWS_ACCESS_KEY_ID: str = ''

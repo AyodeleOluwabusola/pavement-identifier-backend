@@ -62,7 +62,9 @@ def publish_message(message: dict) -> bool:
             channel.basic_publish(
                 exchange=EXCHANGE_NAME,
                 routing_key=ROUTING_KEY,
+
                 body=json.dumps(message),
+
                 properties=pika.BasicProperties(
                     delivery_mode=2,  # make message persistent
                     content_type='application/json'

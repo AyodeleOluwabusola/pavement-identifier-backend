@@ -4,7 +4,7 @@ from app.core.config import settings
 from app.batch import process_images_from_dir
 from app.services.file_service import read_image
 from app.services.rabbitmq_service import publish_message
-from app.services.listener import ConsumerManager
+from app.services.listener import start_listener
 import threading
 import os
 from typing import Dict, Any, Optional
@@ -13,6 +13,7 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 import base64
 import torch
+from app.ml.pavement_classifier import PavementClassifier
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -26,16 +27,21 @@ executor = ThreadPoolExecutor(max_workers=4)
 # Store background task status
 task_status: Dict[str, Any] = {}
 
-# Global variable to store the consumer manager
-consumer_manager: Optional[ConsumerManager] = None
+# Single instance of classifier shared across the application
+classifier = PavementClassifier()
 
+# Global variable to store the consumer manager
+consumer_manager = None
 
 def initialize_consumer_manager():
-    """Initialize the consumer manager in a separate thread"""
+    """Initialize the consumer manager with shared classifier"""
     global consumer_manager
     try:
-        consumer_manager = ConsumerManager(num_consumers=3)
-        consumer_manager.start()
+        # Initialize classifier first
+        classifier.initialize()
+        # Pass the initialized classifier to the consumer manager
+        consumer_manager = start_listener(
+            classifier=classifier, num_consumers=3)
         logger.info("Consumer manager initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize consumer manager: {e}")
