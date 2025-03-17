@@ -11,3 +11,4 @@ celerybeat-schedule.db
 .idea/modules.xml
 app/.env
 app/.env
+app/.env
