@@ -39,6 +39,7 @@ import mlflow
 import mlflow.pytorch
 import time
 from contextlib import contextmanager
+from app.services.image_organizer import ImageOrganizer
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -211,7 +212,11 @@ class PavementClassifier:
         with self.lock:
             try:
                 logger.info("Writing results to Excel...")
-                file_path = "image_processing_results.xlsx"
+                file_path = settings.EXCEL_RESULTS_PATH
+                
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                
                 if os.path.exists(file_path):
                     workbook = openpyxl.load_workbook(file_path)
                 else:
@@ -227,9 +232,20 @@ class PavementClassifier:
                     result.get('Predicted Class', 'Unknown'),
                     result.get('Confidence', 0.0)
                 ])
-                workbook.save(file_path)
+                
+                try:
+                    workbook.save(file_path)
+                    logger.info(f"Results saved to {file_path}")
+                except PermissionError:
+                    alternative_path = os.path.join(
+                        os.path.dirname(file_path),
+                        f"image_processing_results_{int(time.time())}.xlsx"
+                    )
+                    logger.warning(f"Could not save to {file_path}, trying alternative path: {alternative_path}")
+                    workbook.save(alternative_path)
+                    
             except Exception as e:
-                logger.error(f"Error writing to Excel: {e}")
+                logger.error(f"Error writing to Excel at {file_path}: {e}")
 
 class RabbitMQConsumer:
     def __init__(self, classifier: PavementClassifier):
@@ -240,6 +256,7 @@ class RabbitMQConsumer:
         self.queue_name = "image_queue"
         self.exchange_name = "image_exchange"
         self.routing_key = "image_routing_key"
+        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
 
     def connect(self):
         """Establish connection to RabbitMQ"""
@@ -304,31 +321,45 @@ class RabbitMQConsumer:
 
             # Process the message
             message_data = json.loads(body)
+            print("Message data:", message_data)
             file_name = message_data.get("file_name")
             image_data = message_data.get("image_data")
+            image_path = message_data.get("image_path")
 
             logger.info(f"Processing message for file: {file_name}")
 
             # Classify the image
-            logger.info(f"Starting classification for {file_name}")
             result = self.classifier.classify_image(image_data=image_data)
-            logger.info(f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
+            
+            # Organize the image if path is provided
+            print(f"image_path here: {image_path}")
+            # print(f"image_data here: {image_data}")
+            if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                print(f"Organizing image..., image_path: {image_path}")
+                organization_result = self.image_organizer.organize_image(
+                    image_path, 
+                    result
+                )
+                result['organization_result'] = organization_result
 
             # Write results to Excel
             if file_name and result:
-                logger.info(f"Writing results to Excel for {file_name}")
                 self.classifier.write_to_excel(file_name, result)
 
-            # Acknowledge successful processing
+            # Log classification and organization results
+            logger.info(
+                f"Processed {file_name}: "
+                f"Class={result.get('Predicted Class', 'unknown')}, "
+                f"Confidence={result.get('Confidence', 0):.2f}"
+            )
+
+            # Acknowledge message
             ch.basic_ack(delivery_tag=method.delivery_tag)
             logger.info(f"Successfully processed and acknowledged message for {file_name}")
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid message format: {e}")
-            ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
         except Exception as e:
             logger.error(f"Error processing message: {e}")
-            ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
     def stop(self):
         """Stop consuming messages and close connection"""
