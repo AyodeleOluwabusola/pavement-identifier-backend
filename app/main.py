@@ -1,19 +1,18 @@
-from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from app.core.config import settings
-from app.core.logger import setup_logging
-from app.batch import process_images_from_dir
-from app.services.file_service import read_image
-from app.services.rabbitmq_service import publish_message
-from app.services.listener import start_listener
-import threading
-import os
-from typing import Dict, Any, Optional
-import logging
 import asyncio
 import base64
-import torch
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any
+
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+
+from app.batch import process_images_from_dir
+from app.core.config import settings
+from app.core.logger import setup_logging
 from app.ml.pavement_classifier import PavementClassifier
+from app.services.listener import start_listener
+from app.services.rabbitmq_service import publish_message
 
 # Configure logging
 logger = setup_logging()

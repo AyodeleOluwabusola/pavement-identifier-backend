@@ -1,9 +1,10 @@
-import pika
 import json
 import logging
-from typing import Optional
-from app.core.config import settings
 from contextlib import contextmanager
+
+import pika
+
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 

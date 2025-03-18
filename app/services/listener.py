@@ -1,24 +1,15 @@
-from contextlib import contextmanager
-import time
-import mlflow.pytorch
-import mlflow
-from PIL import Image
-from io import BytesIO
-from torchvision import transforms
-from app.core.config import settings
-from concurrent.futures import ThreadPoolExecutor, Future
-from openpyxl import Workbook
-import openpyxl
-import pika
-from typing import Optional, Dict, Any, Tuple, List
-from threading import Lock, Thread, Event
-import logging
 import json
-import base64
-import sys
+import logging
 import os
+import sys
+from threading import Thread, Event
+from typing import List
 
+import pika
+
+from app.core.config import settings
 from app.ml.pavement_classifier import PavementClassifier
+from app.services.image_organizer import ImageOrganizer
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
