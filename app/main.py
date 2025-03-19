@@ -34,7 +34,7 @@ app.add_middleware(
 )
 
 # Create a ThreadPoolExecutor with a reasonable number of workers
-executor = ThreadPoolExecutor(max_workers=4)
+executor = ThreadPoolExecutor(max_workers=settings.RABBITMQ_NUM_PRODUCERS)
 
 # Store background task status
 task_status: Dict[str, Any] = {}

@@ -7,16 +7,27 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class ImageOrganizer:
+    _instance = None
+    _initialized = False
+
+    def __new__(cls, *args, **kwargs):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
     def __init__(self, base_output_dir: str = "categorized_images"):
         """
         Initialize the ImageOrganizer with a base output directory.
+        Uses singleton pattern to ensure only one session directory is created.
 
         Args:
             base_output_dir: Base directory where categorized images will be stored
         """
-        self.base_output_dir = base_output_dir
-        self.categories = ['asphalt', 'chip-sealed', 'gravel', 'uncertain']
-        self._create_category_dirs()
+        if not self._initialized:
+            self.base_output_dir = base_output_dir
+            self.categories = ['asphalt', 'chip-sealed', 'gravel', 'uncertain']
+            self._create_category_dirs()
+            self.__class__._initialized = True
 
     def _create_category_dirs(self) -> None:
         """Create directory structure for categorized images"""

@@ -15,9 +15,11 @@ class Settings(BaseSettings):
 
     RESULTS_DIR: str = 'results'  # Default directory for results
     EXCEL_RESULTS_PATH: str = '/Users/ayodele/Documents/data/image_processing_results.xlsx'
-    BATCH_PROCESSING_STARTUP_DIRECTORY: str = '/Users/ayodele/Documents/data/unlabeled_data'  # Empty string means no startup processing
+    BATCH_PROCESSING_STARTUP_DIRECTORY: str = '/Users/ayodele/Documents/data/new_unlabeled_data'  # Empty string means no startup processing
     CATEGORIZED_IMAGES_DIR: str='/Users/ayodele/Documents/data'
     ORGANIZED_IMAGES_INTO_FOLDERS: bool=True
+    RABBITMQ_NUM_PRODUCERS: int = 4
+    RABBITMQ_NUM_CONSUMERS: int = 5
     LOG_FILE: str = 'logs/pavement_identifier.log'
     LOG_LEVEL: str = 'INFO'
 
