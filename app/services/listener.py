@@ -197,7 +197,7 @@ class ConsumerManager:
             self.initialization_thread = Thread(target=self._initialize)
             self.initialization_thread.daemon = True
             self.initialization_thread.start()
-            logger.info("Started classifier initialization")
+            logger.info("Started classifier configured for listener")
 
         except Exception as e:
             logger.error(f"Error starting consumer Manager: {e}")
