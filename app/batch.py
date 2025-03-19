@@ -1,10 +1,12 @@
-import os
-from typing import Dict, List, Any
-from app.services.rabbitmq_service import publish_message
-from app.services.file_service import read_image
 import logging
+import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, Any
+
 from tqdm import tqdm
+
+from app.services.file_service import read_image
+from app.services.rabbitmq_service import publish_message
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)

@@ -1,24 +1,15 @@
-from contextlib import contextmanager
-import time
-import mlflow.pytorch
-import mlflow
-from PIL import Image
-from io import BytesIO
-from torchvision import transforms
-from app.core.config import settings
-from concurrent.futures import ThreadPoolExecutor, Future
-from openpyxl import Workbook
-import openpyxl
-import pika
-from typing import Optional, Dict, Any, Tuple, List
-from threading import Lock, Thread, Event
-import logging
 import json
-import base64
-import sys
+import logging
 import os
+import sys
+from threading import Thread, Event
+from typing import List
 
+import pika
+
+from app.core.config import settings
 from app.ml.pavement_classifier import PavementClassifier
+from app.services.image_organizer import ImageOrganizer
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -52,6 +43,7 @@ class RabbitMQConsumer:
         self.queue_name = "image_queue"
         self.exchange_name = "image_exchange"
         self.routing_key = "image_routing_key"
+        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
 
     def connect(self):
         """Establish connection to RabbitMQ"""
@@ -126,12 +118,24 @@ class RabbitMQConsumer:
             message_data = json.loads(body)
             file_name = message_data.get("file_name")
             image_data = message_data.get("image_data")
+            image_path = message_data.get("image_path")
 
             logger.info(f"Processing message for file: {file_name}")
 
             # Classify the image
             logger.debug(f"Starting classification for {file_name}")
             result = self.classifier.classify_image(image_data=image_data)
+
+            # Organize the image if path is provided
+            print(f"image_path here: {image_path}")
+            # print(f"image_data here: {image_data}")
+            if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                print(f"Organizing image..., image_path: {image_path}")
+                organization_result = self.image_organizer.organize_image(
+                    image_path,
+                    result
+                )
+                result['organization_result'] = organization_result
             logger.debug(
                 f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
 
@@ -140,10 +144,16 @@ class RabbitMQConsumer:
                 logger.info(f"Writing results to Excel for {file_name}")
                 self.classifier.write_to_excel(file_name, result)
 
-            # Acknowledge successful processing
-            ch.basic_ack(delivery_tag=method.delivery_tag)
+            # Log classification and organization results
             logger.info(
-                f"Successfully processed and acknowledged message for {file_name}")
+                f"Processed {file_name}: "
+                f"Class={result.get('Predicted Class', 'unknown')}, "
+                f"Confidence={result.get('Confidence', 0):.2f}"
+            )
+
+            # Acknowledge message
+            ch.basic_ack(delivery_tag=method.delivery_tag)
+            logger.info(f"Successfully processed and acknowledged message for {file_name}")
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid message format: {e}")

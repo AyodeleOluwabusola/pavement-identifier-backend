@@ -1,23 +1,21 @@
-from concurrent.futures import ThreadPoolExecutor
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from app.core.config import settings
-from app.batch import process_images_from_dir
-from app.services.file_service import read_image
-from app.services.rabbitmq_service import publish_message
-from app.services.listener import start_listener
-import threading
-import os
-from typing import Dict, Any, Optional
-import logging
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 import base64
-import torch
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Any
+
+from fastapi import FastAPI, BackgroundTasks, HTTPException
+
+from app.batch import process_images_from_dir
+from app.core.config import settings
+from app.core.logger import setup_logging
 from app.ml.pavement_classifier import PavementClassifier
+from app.services.listener import start_listener
+from app.services.rabbitmq_service import publish_message
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = setup_logging()
 
 app = FastAPI(title=settings.APP_NAME)
 
@@ -62,6 +60,30 @@ def get_config():
         "RABBITMQ_URL": settings.RABBITMQ_URL
     }
 
+async def process_startup_directory():
+    """Process the startup directory if specified"""
+    if not settings.BATCH_PROCESSING_STARTUP_DIRECTORY:
+        return
+
+    logger.info(f"Processing startup directory: {settings.BATCH_PROCESSING_STARTUP_DIRECTORY}")
+
+    try:
+        # Wait for consumer manager to be ready
+        for _ in range(30):  # Wait up to 30 seconds
+            if consumer_manager and consumer_manager.is_ready():
+                break
+            await asyncio.sleep(1)
+
+        if not consumer_manager or not consumer_manager.is_ready():
+            logger.error("Consumer manager not ready after waiting. Skipping startup directory processing.")
+            return
+
+        # Process the directory
+        await publish_images_from_directory(settings.BATCH_PROCESSING_STARTUP_DIRECTORY, BackgroundTasks())
+        logger.info(f"Completed processing startup directory: {settings.BATCH_PROCESSING_STARTUP_DIRECTORY}")
+
+    except Exception as e:
+        logger.error(f"Error processing startup directory: {e}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -69,6 +91,11 @@ async def startup_event():
     threading.Thread(target=initialize_consumer_manager, daemon=True).start()
     logger.info("Started consumer manager initialization")
 
+    # Process startup directory if specified
+    if settings.BATCH_PROCESSING_STARTUP_DIRECTORY:
+        logger.info(f"Startup directory specified: {settings.BATCH_PROCESSING_STARTUP_DIRECTORY}")
+        # Create task to process directory after service is ready
+        asyncio.create_task(process_startup_directory())
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -128,8 +155,7 @@ async def publish_images_from_directory(directory_path: str, background_tasks: B
                 detail="Model is still loading. Please try again in a few moments."
             )
 
-        logger.info(
-            "Service checks passed, proceeding with directory processing")
+        logger.info("Service checks passed, proceeding with directory processing")
 
         # Validate directory exists
         if not os.path.exists(directory_path):
@@ -177,7 +203,8 @@ async def publish_images_from_directory(directory_path: str, background_tasks: B
                 # Create message
                 message = {
                     "file_name": image_file,
-                    "image_data": image_data
+                    "image_data": image_data,
+                    "image_path": image_path
                 }
 
                 # Publish message
@@ -262,4 +289,19 @@ async def get_service_status():
         "details": "Service is ready" if is_ready and active_consumers > 0 else "Service is still initializing",
         "model_status": "ready" if is_ready else "loading",
         "consumers": active_consumers
+    }
+
+@app.get("/startup-status")
+async def get_startup_status():
+    """Get the status of startup directory processing"""
+    if not settings.BATCH_PROCESSING_STARTUP_DIRECTORY:
+        return {
+            "status": "not_configured",
+            "message": "No startup directory configured"
+        }
+
+    return {
+        "status": "processing" if settings.BATCH_PROCESSING_STARTUP_DIRECTORY in task_status else "not_started",
+        "directory": settings.BATCH_PROCESSING_STARTUP_DIRECTORY,
+        "details": task_status.get(settings.BATCH_PROCESSING_STARTUP_DIRECTORY, {})
     }
