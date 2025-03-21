@@ -9,9 +9,9 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 RABBITMQ_HOST = settings.RABBITMQ_HOST
-EXCHANGE_NAME = "image_exchange"
-QUEUE_NAME = "image_queue"
-ROUTING_KEY = "image_routing_key"
+EXCHANGE_NAME = settings.EXCHANGE_NAME
+QUEUE_NAME = settings.QUEUE_NAME
+ROUTING_KEY = settings.ROUTING_KEY
 CONNECTION_TIMEOUT = 5  # seconds
 
 

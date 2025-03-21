@@ -40,9 +40,9 @@ class RabbitMQConsumer:
         self.connection = None
         self.channel = None
         self._stopped = False
-        self.queue_name = "image_queue"
-        self.exchange_name = "image_exchange"
-        self.routing_key = "image_routing_key"
+        self.queue_name = settings.QUEUE_NAME
+        self.exchange_name = settings.EXCHANGE_NAME
+        self.routing_key = settings.ROUTING_KEY
         self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
 
     def connect(self):
