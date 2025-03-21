@@ -1,202 +1,38 @@
-import base64
-import os
 import json
 import logging
-from threading import Lock, Thread, Event
-from typing import Optional, Dict, Any, Tuple, List
+import os
+import sys
+from threading import Thread, Event
+from typing import List
+
 import pika
-import openpyxl
-from openpyxl import Workbook
-from concurrent.futures import ThreadPoolExecutor
-import torch
-from torchvision import transforms
-from io import BytesIO
-from PIL import Image
-import mlflow
-import mlflow.pytorch
-import time
+
+from app.core.config import settings
+from app.ml.pavement_classifier import PavementClassifier
+from app.services.image_organizer import ImageOrganizer
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-class PavementClassifier:
-    def __init__(self):
-        self.executor = ThreadPoolExecutor(max_workers=3)
-        self.model = None
-        self.device = torch.device("mps" if torch.mps.is_available() else "cpu")
-        self.lock = Lock()
-        self.classes = ['asphalt', 'chip-sealed', 'gravel']
-        self.model_uri = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
-        self.confidence_threshold = 0.55
-        self.img_size = (256, 256)
-        self.is_ready = Event()
 
-        # Define the inference transform
-        self.inference_transform = transforms.Compose([
-            transforms.Lambda(lambda img: img.convert("L")),
-            transforms.Resize(self.img_size),
-            transforms.ToTensor(),
-            transforms.Normalize((0.5,), (0.5,))
-        ])
+# Issue with reading torch import this resolves it.
+try:
+    import torch
+    print("PyTorch version:", torch.__version__)
+except ImportError as e:
+    print("Failed to import torch:", e)
+    print("Checking if torch is in site-packages...")
+    python_path = sys.executable
+    site_packages = os.path.join(os.path.dirname(
+        os.path.dirname(python_path)), 'lib/python3.11/site-packages')
+    print("Site packages location:", site_packages)
+    if os.path.exists(os.path.join(site_packages, 'torch')):
+        print("torch directory exists in site-packages")
+    else:
+        print("torch directory not found in site-packages")
 
-    def initialize(self):
-        """Initialize MLflow and load model asynchronously"""
-        try:
-            self._setup_mlflow()
-            self._load_model()
-            self.is_ready.set()
-            logger.info("PavementClassifier initialization completed")
-        except Exception as e:
-            logger.error(f"Failed to initialize PavementClassifier: {e}")
-            raise
 
-    def _setup_mlflow(self) -> None:
-        """Setup MLflow connection with retry logic"""
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                mlflow.set_tracking_uri("http://52.42.208.9:5000/")
-                mlflow.set_experiment("Pytorch_CNN_from_Scratch_Pavement_Surface_Classification")
-                logger.info("MLflow connection established successfully")
-                return
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to connect to MLflow after {max_retries} attempts: {e}")
-                    raise
-                logger.warning(f"MLflow connection attempt {attempt + 1} failed, retrying...")
-                time.sleep(2 ** attempt)
-
-    def _load_model(self) -> None:
-        """Load the model with proper error handling"""
-        try:
-            logger.info("Loading model from MLflow...")
-            self.model = mlflow.pytorch.load_model(
-                self.model_uri,
-                map_location=self.device
-            )
-            self.model.to(self.device)
-            self.model.eval()
-        except Exception as e:
-            logger.error(f"Failed to load model: {e}")
-            raise
-
-    def wait_until_ready(self, timeout: Optional[float] = None) -> bool:
-        """Wait until the classifier is ready to process images"""
-        return self.is_ready.wait(timeout=timeout)
-
-    def transform_image(self, image_path: Optional[str] = None, image_base64: Optional[str] = None) -> Optional[torch.Tensor]:
-        """Transform image for model input"""
-        try:
-            if image_path:
-                logger.info(f"Opening image from path: {image_path}")
-                img = Image.open(image_path)
-            else:
-                image_data = base64.b64decode(image_base64)
-                img = Image.open(BytesIO(image_data))
-
-            img_tensor = self.inference_transform(img)
-            img_tensor = img_tensor.unsqueeze(0)  # Add batch dimension
-            return img_tensor
-
-        except Exception as e:
-            logger.error(f"Error transforming image: {e}")
-            return None
-
-    # def transform_image(image_path):
-    #     """
-    #     Preprocess an image:
-    #       - Opens the image in grayscale.
-    #       - Resizes to IMG_SIZE.
-    #       - Converts to a tensor and normalizes.
-    #       - Adds a batch dimension.
-    #     """
-    #     img = Image.open(image_path)
-    #     img = inference_transform(img)
-    #     # Add a batch dimension: resulting shape becomes (1, 1, 256, 256)
-    #     img = img.unsqueeze(0)
-    #     return img
-
-    @torch.no_grad()
-    def run_inference(self, img_tensor) -> Tuple[float, int]:
-        """Run model inference"""
-        try:
-            logger.info(f"Running inference on image: {img_tensor}")
-            logger.info(f"Running inference on image shape: {img_tensor.shape}")
-            logger.info(f"Running inference on image device: {img_tensor.device}")
-            outputs = self.model(img_tensor)
-            logger.info(f"Inference results: {outputs}")
-            probs = torch.softmax(outputs, dim=1)
-            max_prob, pred_idx = torch.max(probs, dim=1)
-            return max_prob.item(), pred_idx.item()
-        except Exception as e:
-            logger.error(f"Error during inference: {e}")
-            raise
-
-    def classify_image(self, image_path: Optional[str] = None, image_data: Optional[str] = None) -> Dict[str, Any]:
-        """Classify a single image"""
-        try:
-            img_tensor = self.transform_image(image_path, image_data)
-            logger.info(f"Before tensor to device: {img_tensor}")
-            img_tensor = img_tensor.to(self.device)
-            if img_tensor is None:
-                return {
-                    'Image Path': image_path,
-                    'Message': "Error processing Image",
-                    'Status': "Error"
-                }
-
-            max_prob, pred_idx = self.run_inference(img_tensor)
-
-            if max_prob >= self.confidence_threshold:
-                return {
-                    'Image Path': image_path,
-                    'Message': "Success",
-                    'Predicted Class': self.classes[pred_idx],
-                    'Confidence': max_prob,
-                    'Status': "Success"
-                }
-            else:
-                return {
-                    'Image Path': image_path,
-                    'Message': "Uncertain",
-                    'Predicted Class': "Uncertain",
-                    'Confidence': max_prob,
-                    'Status': "Uncertain"
-                }
-
-        except Exception as e:
-            logger.error(f"Error classifying image: {e}")
-            return {
-                'Image Path': image_path,
-                'Message': f"Error: {str(e)}",
-                'Status': "Error"
-            }
-
-    def write_to_excel(self, file_name: str, result: Dict[str, Any]) -> None:
-        """Write classification results to Excel"""
-        with self.lock:
-            try:
-                logger.info("Writing results to Excel...")
-                file_path = "image_processing_results.xlsx"
-                if os.path.exists(file_path):
-                    workbook = openpyxl.load_workbook(file_path)
-                else:
-                    workbook = Workbook()
-                    sheet = workbook.active
-                    sheet.title = "Image Processing Results"
-                    sheet.append(["File Name", "Status", "Predicted Class", "Confidence"])
-
-                sheet = workbook.active
-                sheet.append([
-                    file_name,
-                    result.get('Status', 'Error'),
-                    result.get('Predicted Class', 'Unknown'),
-                    result.get('Confidence', 0.0)
-                ])
-                workbook.save(file_path)
-            except Exception as e:
-                logger.error(f"Error writing to Excel: {e}")
 
 class RabbitMQConsumer:
     def __init__(self, classifier: PavementClassifier):
@@ -207,12 +43,21 @@ class RabbitMQConsumer:
         self.queue_name = "image_queue"
         self.exchange_name = "image_exchange"
         self.routing_key = "image_routing_key"
+        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
 
     def connect(self):
         """Establish connection to RabbitMQ"""
         try:
             self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(host='localhost')
+                pika.ConnectionParameters(
+                    host=settings.RABBITMQ_HOST,
+                    port=settings.RABBITMQ_PORT,
+                    credentials=pika.PlainCredentials(
+                        settings.RABBITMQ_USER,
+                        settings.RABBITMQ_PASSWORD
+                    ),
+                    virtual_host=settings.RABBITMQ_VHOST
+                )
             )
             self.channel = self.connection.channel()
 
@@ -273,20 +118,40 @@ class RabbitMQConsumer:
             message_data = json.loads(body)
             file_name = message_data.get("file_name")
             image_data = message_data.get("image_data")
+            image_path = message_data.get("image_path")
 
             logger.info(f"Processing message for file: {file_name}")
 
             # Classify the image
-            logger.info(f"Starting classification for {file_name}")
+            logger.debug(f"Starting classification for {file_name}")
             result = self.classifier.classify_image(image_data=image_data)
-            logger.info(f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
+
+            # Organize the image if path is provided
+            print(f"image_path here: {image_path}")
+            # print(f"image_data here: {image_data}")
+            if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                print(f"Organizing image..., image_path: {image_path}")
+                organization_result = self.image_organizer.organize_image(
+                    image_path,
+                    result
+                )
+                result['organization_result'] = organization_result
+            logger.debug(
+                f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
 
             # Write results to Excel
             if file_name and result:
                 logger.info(f"Writing results to Excel for {file_name}")
                 self.classifier.write_to_excel(file_name, result)
 
-            # Acknowledge successful processing
+            # Log classification and organization results
+            logger.info(
+                f"Processed {file_name}: "
+                f"Class={result.get('Predicted Class', 'unknown')}, "
+                f"Confidence={result.get('Confidence', 0):.2f}"
+            )
+
+            # Acknowledge message
             ch.basic_ack(delivery_tag=method.delivery_tag)
             logger.info(f"Successfully processed and acknowledged message for {file_name}")
 
@@ -314,12 +179,13 @@ class RabbitMQConsumer:
         """Cleanup when object is destroyed"""
         self.stop()
 
+
 class ConsumerManager:
-    def __init__(self, num_consumers: int = 3):
+    def __init__(self, pavement_classifier: PavementClassifier, num_consumers: int = 3):
         self.num_consumers = num_consumers
         self.consumers: List[RabbitMQConsumer] = []
         self.consumer_threads: List[Thread] = []
-        self.classifier = PavementClassifier()
+        self.classifier = pavement_classifier
         self.initialization_thread = None
         self._ready = Event()
         self._stopped = Event()
@@ -331,19 +197,16 @@ class ConsumerManager:
             self.initialization_thread = Thread(target=self._initialize)
             self.initialization_thread.daemon = True
             self.initialization_thread.start()
-            logger.info("Started classifier initialization")
+            logger.info("Started classifier configured for listener")
 
         except Exception as e:
-            logger.error(f"Error starting initialization: {e}")
+            logger.error(f"Error starting consumer Manager: {e}")
             self.stop()
             raise
 
     def _initialize(self):
         """Initialize the classifier and start consumers"""
         try:
-            # Initialize the classifier
-            self.classifier.initialize()
-
             # Start consumers
             for i in range(self.num_consumers):
                 if self._stopped.is_set():
@@ -381,16 +244,14 @@ class ConsumerManager:
         """Check if the service is ready"""
         return self._ready.is_set() and any(thread.is_alive() for thread in self.consumer_threads)
 
-def start_listener(num_consumers: int = 3) -> ConsumerManager:
+
+def start_listener(classifier: PavementClassifier, num_consumers: int = 3) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
-        manager = ConsumerManager(num_consumers)
+        manager = ConsumerManager(classifier, num_consumers)
         manager.start()
         logger.info("Started consumer manager")
         return manager
     except Exception as e:
         logger.error(f"Critical error in listener: {e}")
         raise
-
-if __name__ == "__main__":
-    start_listener()
