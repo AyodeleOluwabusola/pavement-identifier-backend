@@ -16,6 +16,7 @@ from app.core.logger import setup_logging
 from app.ml.pavement_classifier import PavementClassifier
 from app.services.listener import start_listener
 from app.services.rabbitmq_service import publish_message
+from app.services.excel_writer_service import run_excel_writer
 from io import BytesIO
 from PIL import Image
 
@@ -53,14 +54,10 @@ class ImageRequest(BaseModel):
     file_name: str = Field(..., description="Name of the image file")
 
 def initialize_consumer_manager():
-    """Initialize the consumer manager with shared classifier"""
+    """Initialize the consumer manager"""
     global consumer_manager
     try:
-        # Initialize classifier first
-        classifier.initialize()
-        # Pass the initialized classifier to the consumer manager
         consumer_manager = start_listener(
-            classifier=classifier,
             num_consumers=settings.RABBITMQ_NUM_CONSUMERS
         )
         logger.info("Consumer manager initialized successfully")
@@ -68,6 +65,13 @@ def initialize_consumer_manager():
         logger.error(f"Failed to initialize consumer manager: {e}")
         consumer_manager = None
 
+
+def initialize_excel_writer():
+    """Initialize the Excel writer service in a separate thread"""
+    try:
+        run_excel_writer()
+    except Exception as e:
+        logger.error(f"Failed to initialize Excel writer service: {e}")
 
 @app.get("/")
 def home():
@@ -115,24 +119,39 @@ async def process_startup_directory():
 
 @app.on_event("startup")
 async def startup_event():
-    """Start the initialization in a separate thread"""
+    """Start the initialization in separate threads"""
+    global excel_writer_thread
+
+    # Start consumer manager
     threading.Thread(target=initialize_consumer_manager, daemon=True).start()
     logger.info("Started consumer manager initialization")
+
+    # Start Excel writer service
+    excel_writer_thread = threading.Thread(
+        target=initialize_excel_writer,
+        daemon=True
+    )
+    excel_writer_thread.start()
+    logger.info("Started Excel writer service initialization")
 
     # Process startup directory if specified
     if settings.BATCH_PROCESSING_STARTUP_DIRECTORY:
         logger.info(
             f"Startup directory specified: {settings.BATCH_PROCESSING_STARTUP_DIRECTORY}")
-        # Create task to process directory after service is ready
         asyncio.create_task(process_startup_directory())
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global consumer_manager
+    global consumer_manager, excel_writer_thread
+
     if consumer_manager:
         logger.info("Shutting down RabbitMQ consumers...")
         consumer_manager.stop()
+
+    if excel_writer_thread and excel_writer_thread.is_alive():
+        logger.info("Shutting down Excel writer service...")
+        # The thread will automatically terminate since it's a daemon thread
 
 
 def process_directory_background(directory_path: str):
