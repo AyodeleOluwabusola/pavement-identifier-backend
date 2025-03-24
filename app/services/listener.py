@@ -8,7 +8,7 @@ from typing import List
 import pika
 
 from app.core.config import settings
-from app.ml.pavement_classifier import PavementClassifier
+from app.ml.base_classifier import BasePavementClassifier
 from app.services.image_organizer import ImageOrganizer
 
 # Configure logging
@@ -35,19 +35,32 @@ except ImportError as e:
 
 
 class RabbitMQConsumer:
-    def __init__(self, classifier: PavementClassifier):
+    def __init__(self, classifier: BasePavementClassifier):
         self.classifier = classifier
         self.connection = None
         self.channel = None
         self._stopped = False
+        # Use the same queue settings as the producer
         self.queue_name = settings.QUEUE_NAME
         self.exchange_name = settings.EXCHANGE_NAME
         self.routing_key = settings.ROUTING_KEY
-        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
+        self.image_organizer = ImageOrganizer()  # Add this if not already present
+        logger.info(f"Initializing consumer with queue: {settings.QUEUE_NAME}, "
+                   f"exchange: {settings.EXCHANGE_NAME}, "
+                   f"routing_key: {settings.ROUTING_KEY}")
 
     def connect(self):
         """Establish connection to RabbitMQ"""
         try:
+            # Log connection details
+            logger.info("Consumer connecting to RabbitMQ with settings:")
+            logger.info(f"Host: {settings.RABBITMQ_HOST}")
+            logger.info(f"Port: {settings.RABBITMQ_PORT}")
+            logger.info(f"Virtual Host: {settings.RABBITMQ_VHOST}")
+            logger.info(f"Exchange: {settings.EXCHANGE_NAME}")
+            logger.info(f"Queue: {settings.QUEUE_NAME}")
+            logger.info(f"Routing Key: {settings.ROUTING_KEY}")
+
             self.connection = pika.BlockingConnection(
                 pika.ConnectionParameters(
                     host=settings.RABBITMQ_HOST,
@@ -62,20 +75,27 @@ class RabbitMQConsumer:
             self.channel = self.connection.channel()
 
             # Declare exchange and queue
+            logger.info(f"Declaring exchange: {self.exchange_name}")
             self.channel.exchange_declare(
                 exchange=self.exchange_name,
                 exchange_type='direct',
                 durable=True
             )
-            self.channel.queue_declare(
+
+            logger.info(f"Declaring queue: {self.queue_name}")
+            result = self.channel.queue_declare(
                 queue=self.queue_name,
                 durable=True
             )
+            logger.info(f"Queue declared. Current message count: {result.method.message_count}")
+
+            logger.info(f"Binding queue to exchange with routing key: {self.routing_key}")
             self.channel.queue_bind(
                 exchange=self.exchange_name,
                 queue=self.queue_name,
                 routing_key=self.routing_key
             )
+
             self.channel.basic_qos(prefetch_count=1)
             logger.info("Successfully connected to RabbitMQ")
 
@@ -127,10 +147,10 @@ class RabbitMQConsumer:
             result = self.classifier.classify_image(image_data=image_data)
 
             # Organize the image if path is provided
-            print(f"image_path here: {image_path}")
+            logger.info(f"image_path here: {image_path}")
             # print(f"image_data here: {image_data}")
             if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
-                print(f"Organizing image..., image_path: {image_path}")
+                logger.info(f"Organizing image..., image_path: {image_path}")
                 organization_result = self.image_organizer.organize_image(
                     image_path,
                     result
@@ -181,7 +201,7 @@ class RabbitMQConsumer:
 
 
 class ConsumerManager:
-    def __init__(self, pavement_classifier: PavementClassifier, num_consumers: int = 3):
+    def __init__(self, pavement_classifier: BasePavementClassifier, num_consumers: int = 3):
         self.num_consumers = num_consumers
         self.consumers: List[RabbitMQConsumer] = []
         self.consumer_threads: List[Thread] = []
@@ -245,7 +265,7 @@ class ConsumerManager:
         return self._ready.is_set() and any(thread.is_alive() for thread in self.consumer_threads)
 
 
-def start_listener(classifier: PavementClassifier, num_consumers: int = 3) -> ConsumerManager:
+def start_listener(classifier: BasePavementClassifier, num_consumers: int = 3) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
         manager = ConsumerManager(classifier, num_consumers)
