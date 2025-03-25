@@ -13,11 +13,9 @@ from app.batch import process_images_from_dir
 from app.core.config import settings
 from app.core.logger import setup_logging
 from app.ml.classifier_factory import create_classifier
+from app.services.excel_writer_service import run_excel_writer
 from app.services.listener import start_listener
 from app.services.rabbitmq_service import publish_message
-from app.services.excel_writer_service import run_excel_writer
-from io import BytesIO
-from PIL import Image
 
 # Configure logging
 logger = setup_logging()
@@ -188,10 +186,21 @@ def process_directory_background(directory_path: str):
         }
 
 
+def get_all_image_files(directory_path: str) -> list:
+    """Recursively get all image files from directory and its subdirectories"""
+    image_files = []
+    for root, _, files in os.walk(directory_path):
+        for file in files:
+            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp')):
+                # Store full path relative to the base directory
+                full_path = os.path.join(root, file)
+                image_files.append(full_path)
+    return image_files
+
 @app.post("/publish-images-from-dir/")
 async def publish_images_from_directory(directory_path: str, background_tasks: BackgroundTasks):
     """
-    Publish images from a directory to RabbitMQ for processing.
+    Publish images from a directory and its subdirectories to RabbitMQ for processing.
     Returns a task ID that can be used to check the status.
     """
     try:
@@ -227,17 +236,14 @@ async def publish_images_from_directory(directory_path: str, background_tasks: B
         task_status[directory_path] = {
             "status": "starting", "message": "Task scheduled"}
 
-        # Get list of image files
-        image_files = [f for f in os.listdir(directory_path)
-                       if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp'))]
+        # Get list of image files recursively
+        image_files = get_all_image_files(directory_path)
 
         if not image_files:
-            logger.warning(
-                f"No image files found in directory: {directory_path}")
-            raise HTTPException(
-                status_code=400, detail="No image files found in directory")
+            logger.warning(f"No image files found in directory or subdirectories: {directory_path}")
+            raise HTTPException(status_code=400, detail="No image files found in directory or subdirectories")
 
-        logger.info(f"Found {len(image_files)} images in directory")
+        logger.info(f"Found {len(image_files)} images in directory and subdirectories")
 
         # Update task status
         task_status[directory_path].update({
@@ -250,34 +256,33 @@ async def publish_images_from_directory(directory_path: str, background_tasks: B
         successful_publishes = 0
         failed_publishes = 0
 
-        for image_file in image_files:
-            image_path = os.path.join(directory_path, image_file)
+        for image_path in image_files:
             try:
-                logger.info(f"Processing image: {image_file}")
+                logger.info(f"Processing image: {image_path}")
 
                 # Read the image
                 with open(image_path, 'rb') as img_file:
-                    image_data = base64.b64encode(
-                        img_file.read()).decode('utf-8')
+                    image_data = base64.b64encode(img_file.read()).decode('utf-8')
 
                 # Create message
                 message = {
-                    "file_name": image_file,
+                    "file_name": os.path.basename(image_path),
                     "image_data": image_data,
-                    "image_path": image_path
+                    "image_path": image_path,
+                    "relative_path": os.path.relpath(image_path, directory_path)
                 }
 
                 # Publish message
-                logger.info(f"Publishing message for {image_file}")
+                logger.info(f"Publishing message for {image_path}")
                 publish_message(message)
-                logger.info(f"Successfully published message for {image_file}")
+                logger.info(f"Successfully published message for {image_path}")
 
                 # Update processed count
                 task_status[directory_path]["processed_images"] += 1
                 successful_publishes += 1
 
             except Exception as e:
-                logger.error(f"Error processing {image_file}: {e}")
+                logger.error(f"Error processing {image_path}: {e}")
                 failed_publishes += 1
                 continue
 

@@ -1,17 +1,16 @@
 import json
-import logging
-import os
-import time
 import threading
+import time
 from pathlib import Path
-from typing import Dict, Any, List
 from threading import Event, Thread, Lock
+from typing import Dict, Any, List
+
 import pika
 from openpyxl import Workbook, load_workbook
 from openpyxl.utils.exceptions import InvalidFileException
+
 from app.core.config import settings
 from app.core.logger import setup_logging
-from app.services.rabbitmq_service import get_rabbitmq_connection
 
 logger = setup_logging(__name__)
 

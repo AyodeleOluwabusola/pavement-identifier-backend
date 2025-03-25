@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str
 
     # Image Organization Settings
-    ORGANIZED_IMAGES_INTO_FOLDERS: bool
+    ORGANIZE_IMAGES_INTO_FOLDERS: bool
 
     # AWS Settings
     AWS_ACCESS_KEY_ID: str

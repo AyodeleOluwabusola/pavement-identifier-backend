@@ -1,13 +1,11 @@
-from abc import ABC, abstractmethod
 import json
-import time
-from typing import Dict, Any, Optional
-from threading import Lock, Event
-import os
 import logging
+import time
+from abc import ABC, abstractmethod
+from threading import Lock, Event
+from typing import Dict, Any, Optional
+
 import mlflow
-from openpyxl import Workbook
-import openpyxl
 import pika
 
 from app.core.config import settings
