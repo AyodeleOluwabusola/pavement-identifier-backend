@@ -8,12 +8,11 @@ from typing import Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Optional
 
 from app.batch import process_images_from_dir
 from app.core.config import settings
 from app.core.logger import setup_logging
-from app.ml.pavement_classifier import PavementClassifier
+from app.ml.classifier_factory import create_classifier
 from app.services.listener import start_listener
 from app.services.rabbitmq_service import publish_message
 from app.services.excel_writer_service import run_excel_writer
@@ -41,7 +40,7 @@ executor = ThreadPoolExecutor(max_workers=settings.RABBITMQ_NUM_PRODUCERS)
 task_status: Dict[str, Any] = {}
 
 # Single instance of classifier shared across the application
-classifier = PavementClassifier()
+classifier = create_classifier()
 
 # Global variable to store the consumer manager
 consumer_manager = None
