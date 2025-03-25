@@ -70,7 +70,7 @@ class ImageOrganizer:
             new_filename = f"{confidence_str}_{image_filename}"
             target_path = os.path.join(self.session_dir, target_category, new_filename)
 
-            logger.info("Target path: ", target_path)
+            logger.info(f"Target path: {target_path}")
 
             # Verify source image exists
             if not os.path.exists(image_path):

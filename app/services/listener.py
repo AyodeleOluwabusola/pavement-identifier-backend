@@ -44,10 +44,7 @@ class RabbitMQConsumer:
         self.queue_name = settings.QUEUE_NAME
         self.exchange_name = settings.EXCHANGE_NAME
         self.routing_key = settings.ROUTING_KEY
-        self.image_organizer = ImageOrganizer()  # Add this if not already present
-        logger.info(f"Initializing consumer with queue: {settings.QUEUE_NAME}, "
-                   f"exchange: {settings.EXCHANGE_NAME}, "
-                   f"routing_key: {settings.ROUTING_KEY}")
+        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)  # Add this if not already present
 
     def connect(self):
         """Establish connection to RabbitMQ"""

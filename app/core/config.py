@@ -19,15 +19,15 @@ class Settings(BaseSettings):
 
     CONFIDENCE_THRESHOLD: float = 0.70
     EXCEL_RESULTS_PATH: str = '/Users/ayodele/Documents/data/image_processing_results.xlsx'
-    # BATCH_PROCESSING_STARTUP_DIRECTORY: str = '/Users/ayodele/Documents/data/test'  # Empty string means no startup processing
-    BATCH_PROCESSING_STARTUP_DIRECTORY: str = ''  # Empty string means no startup processing
+    BATCH_PROCESSING_STARTUP_DIRECTORY: str = '/Users/ayodele/Documents/data/test'  # Empty string means no startup processing
+    # BATCH_PROCESSING_STARTUP_DIRECTORY: str = ''  # Empty string means no startup processing
     CATEGORIZED_IMAGES_DIR: str='/Users/ayodele/Documents/data'
     ORGANIZED_IMAGES_INTO_FOLDERS: bool=True
     RABBITMQ_NUM_PRODUCERS: int = 5
     RABBITMQ_NUM_CONSUMERS: int = 12
     LOG_FILE: str = 'logs/pavement_identifier.log'
     LOG_LEVEL: str = 'INFO'
-    FRAMEWORK_IN_USE: str = 'pytorch'
+    FRAMEWORK_IN_USE: str = 'tensorflow'
 
     # Add AWS credentials settings
     AWS_ACCESS_KEY_ID: str = ''
