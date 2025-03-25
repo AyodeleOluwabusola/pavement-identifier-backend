@@ -4,39 +4,59 @@ import os
 from logging.handlers import RotatingFileHandler
 from app.core.config import settings
 
-def setup_logging():
-    """Configure logging to both file and console with rotation"""
-    # Create logs directory if it doesn't exist
-    log_dir = os.path.dirname(settings.LOG_FILE)
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
 
-    # Create formatter
+def setup_logging(name: str = None) -> logging.Logger:
+    """
+    Configure logging with both file and console handlers.
+    
+    Args:
+        name: Logger name (optional). If None, returns root logger.
+    
+    Returns:
+        logging.Logger: Configured logger instance
+    """
+    # Create logs directory if it doesn't exist
+    os.makedirs(os.path.dirname(settings.LOG_FILE), exist_ok=True)
+
+    # Create formatter with process information
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        '[%(asctime)s] [%(process)d] [%(name)s] [%(levelname)s] - %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(settings.LOG_LEVEL)
+    # Get or create logger
+    logger = logging.getLogger(name) if name else logging.getLogger()
+    logger.setLevel(logging.getLevelName(settings.LOG_LEVEL))
 
-    # Console handler
+    # Remove existing handlers to avoid duplicates
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # Add console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    logger.addHandler(console_handler)
 
-    # File handler with rotation
-    file_handler = RotatingFileHandler(
-        settings.LOG_FILE,
-        maxBytes=10485760,  # 10MB
-        backupCount=5,      # Keep 5 backup files
-        encoding='utf-8'
-    )
-    file_handler.setFormatter(formatter)
-    root_logger.addHandler(file_handler)
+    try:
+        # Add file handler with rotation
+        file_handler = RotatingFileHandler(
+            settings.LOG_FILE,
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+            encoding='utf-8'
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except Exception as e:
+        console_handler.setLevel(logging.ERROR)
+        logger.error(f"Failed to create file handler: {e}")
 
-    # Set logging levels for specific loggers if needed
-    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
-    logging.getLogger("pika").setLevel(logging.WARNING)
+    # Prevent propagation to root logger if this is a named logger
+    if name:
+        logger.propagate = False
 
-    return root_logger
+    # Set levels for third-party loggers
+    logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+    logging.getLogger('pika').setLevel(logging.WARNING)
+
+    return logger

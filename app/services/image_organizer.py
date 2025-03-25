@@ -31,9 +31,8 @@ class ImageOrganizer:
 
     def _create_category_dirs(self) -> None:
         """Create directory structure for categorized images"""
-        # Create timestamp-based subdirectory
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.session_dir = os.path.join(self.base_output_dir, timestamp)
+        # Use base_output_dir directly without timestamp
+        self.session_dir = self.base_output_dir
 
         # Create directories for each category
         for category in self.categories:
@@ -70,7 +69,7 @@ class ImageOrganizer:
             new_filename = f"{confidence_str}_{image_filename}"
             target_path = os.path.join(self.session_dir, target_category, new_filename)
 
-            print("Target path: ", target_path)
+            logger.info(f"Target path: {target_path}")
 
             # Verify source image exists
             if not os.path.exists(image_path):

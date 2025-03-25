@@ -15,26 +15,38 @@ ROUTING_KEY = settings.ROUTING_KEY
 CONNECTION_TIMEOUT = 5  # seconds
 
 
-@contextmanager
-def get_rabbitmq_connection():
-    """Context manager for handling RabbitMQ connections"""
-    connection = None
-    try:
-        # Set up connection parameters with timeout
-        parameters = pika.ConnectionParameters(
-            host=RABBITMQ_HOST,
-            connection_attempts=3,
-            retry_delay=1,
-            socket_timeout=CONNECTION_TIMEOUT
-        )
-        connection = pika.BlockingConnection(parameters)
-        yield connection
-    except Exception as e:
-        logger.error(f"RabbitMQ connection error: {e}")
-        raise
-    finally:
-        if connection and not connection.is_closed:
-            connection.close()
+def get_rabbitmq_connection(use_context_manager=False):
+    """
+    Get a RabbitMQ connection.
+    Args:
+        use_context_manager (bool): If True, returns a context manager. If False, returns direct connection.
+    """
+    parameters = pika.ConnectionParameters(
+        host=RABBITMQ_HOST,
+        port=settings.RABBITMQ_PORT,
+        credentials=pika.PlainCredentials(
+            settings.RABBITMQ_USER,
+            settings.RABBITMQ_PASSWORD
+        ),
+        virtual_host=settings.RABBITMQ_VHOST,
+        connection_attempts=3,
+        retry_delay=1,
+        socket_timeout=CONNECTION_TIMEOUT
+    )
+
+    if use_context_manager:
+        @contextmanager
+        def connection_context():
+            connection = None
+            try:
+                connection = pika.BlockingConnection(parameters)
+                yield connection
+            finally:
+                if connection and not connection.is_closed:
+                    connection.close()
+        return connection_context()
+    else:
+        return pika.BlockingConnection(parameters)
 
 
 def publish_message(message: dict) -> bool:

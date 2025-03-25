@@ -2,253 +2,321 @@ import json
 import logging
 import os
 import sys
-from threading import Thread, Event
-from typing import List
+import signal
+from multiprocessing import Process, Event
+from typing import List, Optional
+import multiprocessing
+from contextlib import contextmanager
+import threading
+import time
 
 import pika
 
 from app.core.config import settings
-from app.ml.pavement_classifier import PavementClassifier
+from app.ml.classifier_factory import create_classifier
 from app.services.image_organizer import ImageOrganizer
+from app.core.logger import setup_logging
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 
-# Issue with reading torch import this resolves it.
-try:
-    import torch
-    print("PyTorch version:", torch.__version__)
-except ImportError as e:
-    print("Failed to import torch:", e)
-    print("Checking if torch is in site-packages...")
-    python_path = sys.executable
-    site_packages = os.path.join(os.path.dirname(
-        os.path.dirname(python_path)), 'lib/python3.11/site-packages')
-    print("Site packages location:", site_packages)
-    if os.path.exists(os.path.join(site_packages, 'torch')):
-        print("torch directory exists in site-packages")
-    else:
-        print("torch directory not found in site-packages")
+def setup_signal_handlers():
+    """Setup signal handlers for graceful shutdown"""
+    shutdown_event = threading.Event()
 
-
-
-class RabbitMQConsumer:
-    def __init__(self, classifier: PavementClassifier):
-        self.classifier = classifier
-        self.connection = None
-        self.channel = None
-        self._stopped = False
-        self.queue_name = settings.QUEUE_NAME
-        self.exchange_name = settings.EXCHANGE_NAME
-        self.routing_key = settings.ROUTING_KEY
-        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
-
-    def connect(self):
-        """Establish connection to RabbitMQ"""
-        try:
-            self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(
-                    host=settings.RABBITMQ_HOST,
-                    port=settings.RABBITMQ_PORT,
-                    credentials=pika.PlainCredentials(
-                        settings.RABBITMQ_USER,
-                        settings.RABBITMQ_PASSWORD
-                    ),
-                    virtual_host=settings.RABBITMQ_VHOST
-                )
-            )
-            self.channel = self.connection.channel()
-
-            # Declare exchange and queue
-            self.channel.exchange_declare(
-                exchange=self.exchange_name,
-                exchange_type='direct',
-                durable=True
-            )
-            self.channel.queue_declare(
-                queue=self.queue_name,
-                durable=True
-            )
-            self.channel.queue_bind(
-                exchange=self.exchange_name,
-                queue=self.queue_name,
-                routing_key=self.routing_key
-            )
-            self.channel.basic_qos(prefetch_count=1)
-            logger.info("Successfully connected to RabbitMQ")
-
-        except Exception as e:
-            logger.error(f"Failed to connect to RabbitMQ: {e}")
-            self.stop()
-            raise
-
-    def start_consuming(self):
-        """Start consuming messages"""
-        if not self.channel or self.channel.is_closed:
-            logger.error("Cannot start consuming - channel is not open")
-            return
-
-        try:
-            self.channel.basic_consume(
-                queue=self.queue_name,
-                on_message_callback=self._process_message
-            )
-            logger.info("Started consuming messages")
-            self.channel.start_consuming()
-
-        except Exception as e:
-            logger.error(f"Error while consuming messages: {e}")
-            self.stop()
-
-    def _process_message(self, ch, method, properties, body):
-        """Process incoming messages"""
-        try:
-            # Log message received
-            logger.info("Received message from RabbitMQ queue")
-
-            # Check if classifier is ready
-            if not self.classifier.is_ready.is_set():
-                logger.warning("Classifier not ready, rejecting message")
-                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
-                return
-
-            # Process the message
-            message_data = json.loads(body)
-            file_name = message_data.get("file_name")
-            image_data = message_data.get("image_data")
-            image_path = message_data.get("image_path")
-
-            logger.info(f"Processing message for file: {file_name}")
-
-            # Classify the image
-            logger.debug(f"Starting classification for {file_name}")
-            result = self.classifier.classify_image(image_data=image_data)
-
-            # Organize the image if path is provided
-            print(f"image_path here: {image_path}")
-            # print(f"image_data here: {image_data}")
-            if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
-                print(f"Organizing image..., image_path: {image_path}")
-                organization_result = self.image_organizer.organize_image(
-                    image_path,
-                    result
-                )
-                result['organization_result'] = organization_result
-            logger.debug(
-                f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
-
-            # Write results to Excel
-            if file_name and result:
-                logger.info(f"Writing results to Excel for {file_name}")
-                self.classifier.write_to_excel(file_name, result)
-
-            # Log classification and organization results
+    def signal_handler(signum, frame):
+        if not shutdown_event.is_set():
+            shutdown_event.set()
             logger.info(
-                f"Processed {file_name}: "
-                f"Class={result.get('Predicted Class', 'unknown')}, "
-                f"Confidence={result.get('Confidence', 0):.2f}"
-            )
+                f"Received signal {signum}. Initiating graceful shutdown...")
+            # Instead of sys.exit(0), we'll use the event to coordinate shutdown
+            raise SystemExit()
 
-            # Acknowledge message
-            ch.basic_ack(delivery_tag=method.delivery_tag)
-            logger.info(f"Successfully processed and acknowledged message for {file_name}")
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, signal_handler)
+    return shutdown_event
 
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid message format: {e}")
-            ch.basic_reject(delivery_tag=method.delivery_tag, requeue=False)
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
-            ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
 
-    def stop(self):
-        """Stop consuming messages and close connection"""
-        self._stopped = True
+class ProcessManager:
+    """Manages process lifecycle and resource cleanup"""
+
+    def __init__(self):
+        self._processes: List[multiprocessing.Process] = []
+        self._lock = threading.Lock()
+        self._shutdown_event = threading.Event()
+
+    def add_process(self, process: multiprocessing.Process):
+        with self._lock:
+            self._processes.append(process)
+
+    def remove_process(self, process: multiprocessing.Process):
+        with self._lock:
+            if process in self._processes:
+                self._processes.remove(process)
+
+    def cleanup_resources(self):
+        """Clean up any remaining resources"""
         try:
-            if self.channel and not self.channel.is_closed:
-                self.channel.stop_consuming()
-                self.channel.close()
-            if self.connection and not self.connection.is_closed:
-                self.connection.close()
-            logger.info("Consumer stopped successfully")
+            # Get the internal resource tracker module
+            resource_tracker = multiprocessing.resource_tracker._resource_tracker
+            if resource_tracker is not None:
+                # Clear the resource tracker's internal state
+                resource_tracker._resource_tracker = None
+                resource_tracker._pid = None
         except Exception as e:
-            logger.error(f"Error while stopping consumer: {e}")
+            logger.error(f"Error cleaning up resources: {e}")
 
-    def __del__(self):
-        """Cleanup when object is destroyed"""
-        self.stop()
+
+def run_consumer():
+    """Function to run in each consumer process"""
+    process_logger = setup_logging(f"consumer_process_{os.getpid()}")
+    process_logger.info(f"Starting consumer process with PID: {os.getpid()}")
+
+    connection = None
+    channel = None
+    classifier = None
+    shutdown_event = setup_signal_handlers()
+
+    def cleanup():
+        nonlocal classifier, channel, connection
+        try:
+            if classifier:
+                process_logger.info("Shutting down classifier...")
+                if hasattr(classifier, 'shutdown'):
+                    classifier.shutdown()
+                classifier = None
+
+            if channel and channel.is_open:
+                process_logger.info("Closing RabbitMQ channel...")
+                channel.close()
+                channel = None
+
+            if connection and not connection.is_closed:
+                process_logger.info("Closing RabbitMQ connection...")
+                connection.close()
+                connection = None
+
+            process_logger.info("Cleanup completed successfully")
+        except Exception as e:
+            process_logger.error(f"Error during cleanup: {e}")
+
+    try:
+        classifier = create_classifier()
+        classifier.initialize()
+
+        # Initialize image organizer
+        image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
+
+        # Initialize RabbitMQ connection
+        connection = pika.BlockingConnection(
+            pika.ConnectionParameters(
+                host=settings.RABBITMQ_HOST,
+                port=settings.RABBITMQ_PORT,
+                credentials=pika.PlainCredentials(
+                    settings.RABBITMQ_USER,
+                    settings.RABBITMQ_PASSWORD
+                ),
+                virtual_host=settings.RABBITMQ_VHOST,
+                heartbeat=600,
+                blocked_connection_timeout=300
+            )
+        )
+        channel = connection.channel()
+
+        # Declare exchange and queue
+        channel.exchange_declare(
+            exchange=settings.EXCHANGE_NAME,
+            exchange_type='direct',
+            durable=True
+        )
+        channel.queue_declare(
+            queue=settings.QUEUE_NAME,
+            durable=True
+        )
+        channel.queue_bind(
+            exchange=settings.EXCHANGE_NAME,
+            queue=settings.QUEUE_NAME,
+            routing_key=settings.ROUTING_KEY
+        )
+        channel.basic_qos(prefetch_count=1)
+
+        def process_message(ch, method, properties, body):
+            try:
+                # Log message received
+                logger.info("Received message from RabbitMQ queue")
+
+                # Check if classifier is ready
+                if not classifier.is_ready.is_set():
+                    logger.warning("Classifier not ready, rejecting message")
+                    ch.basic_reject(
+                        delivery_tag=method.delivery_tag, requeue=True)
+                    return
+
+                # Process the message
+                message_data = json.loads(body)
+                file_name = message_data.get("file_name")
+                image_data = message_data.get("image_data")
+                image_path = message_data.get("image_path")
+
+                logger.info(f"Processing message for file: {file_name}")
+
+                # Classify the image
+                logger.debug(f"Starting classification for {file_name}")
+                result = classifier.classify_image(image_data=image_data)
+
+                # Organize the image if path is provided
+                if image_path and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                    organization_result = image_organizer.organize_image(
+                        image_path,
+                        result
+                    )
+                    result['organization_result'] = organization_result
+
+                # Publish result to queue
+                if file_name and result:
+                    classifier.publish_result(file_name, result)
+
+                # Log classification results
+                logger.info(
+                    f"Processed {file_name}: "
+                    f"Class={result.get('Predicted Class', 'unknown')}, "
+                    f"Confidence={result.get('Confidence', 0):.2f}"
+                )
+
+                # Acknowledge message
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+                logger.info(
+                    f"Successfully processed and acknowledged message for {file_name}")
+
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid message format: {e}")
+                ch.basic_reject(
+                    delivery_tag=method.delivery_tag, requeue=False)
+            except Exception as e:
+                logger.error(f"Error processing message: {e}")
+                ch.basic_reject(delivery_tag=method.delivery_tag, requeue=True)
+
+        # Start consuming
+        channel.basic_consume(
+            queue=settings.QUEUE_NAME,
+            on_message_callback=process_message
+        )
+
+        logger.info(f"Process {os.getpid()} started consuming messages")
+        channel.start_consuming()
+
+        while not shutdown_event.is_set():
+            try:
+                connection.process_data_events(timeout=1.0)
+            except Exception as e:
+                if not shutdown_event.is_set():
+                    process_logger.error(f"Error processing messages: {e}")
+                    time.sleep(1)
+
+    except (KeyboardInterrupt, SystemExit):
+        process_logger.info(f"Process {os.getpid()} received shutdown signal")
+    except Exception as e:
+        process_logger.error(f"Process {os.getpid()} failed: {e}")
+    finally:
+        cleanup()
 
 
 class ConsumerManager:
-    def __init__(self, pavement_classifier: PavementClassifier, num_consumers: int = 3):
+    def __init__(self, num_consumers: int = 3):
         self.num_consumers = num_consumers
-        self.consumers: List[RabbitMQConsumer] = []
-        self.consumer_threads: List[Thread] = []
-        self.classifier = pavement_classifier
-        self.initialization_thread = None
+        self.consumer_processes = []
         self._ready = Event()
         self._stopped = Event()
+        self.process_manager = ProcessManager()
+
+    @contextmanager
+    def _managed_process(self, target_func, *args, **kwargs):
+        """Context manager for process lifecycle management"""
+        process = multiprocessing.Process(
+            target=target_func, args=args, kwargs=kwargs)
+        process.daemon = False
+
+        try:
+            self.process_manager.add_process(process)
+            process.start()
+            yield process
+        finally:
+            self.process_manager.remove_process(process)
 
     def start(self):
-        """Start all consumers and initialize classifier asynchronously"""
+        """Start all consumers in separate processes"""
         try:
-            # Start classifier initialization in a separate thread
-            self.initialization_thread = Thread(target=self._initialize)
-            self.initialization_thread.daemon = True
-            self.initialization_thread.start()
-            logger.info("Started classifier configured for listener")
+            for i in range(self.num_consumers):
+                if self._stopped.is_set():
+                    break
+
+                with self._managed_process(run_consumer) as process:
+                    self.consumer_processes.append(process)
+                    logger.info(
+                        f"Started consumer process {i+1} with PID {process.pid}")
+
+            if self.consumer_processes and not self._stopped.is_set():
+                self._ready.set()
+                logger.info("Consumer manager is ready")
 
         except Exception as e:
             logger.error(f"Error starting consumer Manager: {e}")
             self.stop()
             raise
 
-    def _initialize(self):
-        """Initialize the classifier and start consumers"""
-        try:
-            # Start consumers
-            for i in range(self.num_consumers):
-                if self._stopped.is_set():
-                    break
-
-                consumer = RabbitMQConsumer(self.classifier)
-                consumer.connect()
-                thread = Thread(target=consumer.start_consuming)
-                thread.daemon = True
-                thread.start()
-                self.consumers.append(consumer)
-                self.consumer_threads.append(thread)
-                logger.info(f"Started consumer {i+1}")
-
-            # Mark as ready if we have active consumers
-            if self.consumers and not self._stopped.is_set():
-                self._ready.set()
-                logger.info("Consumer manager is ready")
-
-        except Exception as e:
-            logger.error(f"Error during initialization: {e}")
-            self.stop()
-
     def stop(self):
-        """Stop all consumers gracefully"""
+        """Stop all consumer processes"""
+        if self._stopped.is_set():
+            return
+
         self._stopped.set()
         self._ready.clear()
-        for consumer in self.consumers:
-            consumer.stop()
-        self.consumers.clear()
-        self.consumer_threads.clear()
-        logger.info("Consumer manager stopped")
+
+        logger.info("Initiating graceful shutdown of consumer processes...")
+
+        # First attempt graceful shutdown
+        for process in self.consumer_processes[:]:
+            if process.is_alive():
+                try:
+                    os.kill(process.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    continue
+
+        # Wait for processes to finish
+        timeout = settings.CLEANUP_GRACE_PERIOD
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            if not any(p.is_alive() for p in self.consumer_processes):
+                break
+            time.sleep(0.1)
+
+        # Force terminate any remaining processes
+        for process in self.consumer_processes[:]:
+            if process.is_alive():
+                try:
+                    process.terminate()
+                    process.join(timeout=settings.PROCESS_SHUTDOWN_TIMEOUT)
+                    if process.is_alive():
+                        os.kill(process.pid, signal.SIGKILL)
+                except (OSError, ProcessLookupError):
+                    pass
+
+        # Clean up resources
+        self.process_manager.cleanup_resources()
+        self.consumer_processes.clear()
+        logger.info("Consumer manager stopped and resources cleaned up")
 
     def is_ready(self) -> bool:
         """Check if the service is ready"""
-        return self._ready.is_set() and any(thread.is_alive() for thread in self.consumer_threads)
+        return self._ready.is_set() and any(process.is_alive() for process in self.consumer_processes)
 
 
-def start_listener(classifier: PavementClassifier, num_consumers: int = 3) -> ConsumerManager:
+def start_listener(num_consumers: int = 3) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
-        manager = ConsumerManager(classifier, num_consumers)
+        manager = ConsumerManager(num_consumers)
         manager.start()
         logger.info("Started consumer manager")
         return manager
