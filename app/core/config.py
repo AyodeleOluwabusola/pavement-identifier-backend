@@ -17,10 +17,10 @@ class Settings(BaseSettings):
     MODEL_URI_TENSORFLOW: str = 'runs:/5540bb07536845eeab2e06fab951f1fb/model'
     MODEL_URI_PYTORCH: str = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
 
+    MLFLOW_TRACKING_URI: str = 'http://52.42.208.9:5000/'
     CONFIDENCE_THRESHOLD: float = 0.70
     EXCEL_RESULTS_PATH: str = '/Users/ayodele/Documents/data/image_processing_results.xlsx'
     BATCH_PROCESSING_STARTUP_DIRECTORY: str = '/Users/ayodele/Documents/data/test'  # Empty string means no startup processing
-    # BATCH_PROCESSING_STARTUP_DIRECTORY: str = ''  # Empty string means no startup processing
     CATEGORIZED_IMAGES_DIR: str='/Users/ayodele/Documents/data'
     ORGANIZED_IMAGES_INTO_FOLDERS: bool=True
     RABBITMQ_NUM_PRODUCERS: int = 5

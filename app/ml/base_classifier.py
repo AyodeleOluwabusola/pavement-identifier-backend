@@ -21,7 +21,7 @@ class BasePavementClassifier(ABC):
         self.classes = ['asphalt', 'chip-sealed', 'gravel']
         self.confidence_threshold = settings.CONFIDENCE_THRESHOLD
         
-        mlflow.set_tracking_uri("http://52.42.208.9:5000/")
+        mlflow.set_tracking_uri(settings.MLFLOW_TRACKING_URI)
 
     @abstractmethod
     def initialize(self) -> None:
