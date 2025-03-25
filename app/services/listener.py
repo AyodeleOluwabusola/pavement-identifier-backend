@@ -1,21 +1,20 @@
 import json
 import logging
-import os
-import sys
-import signal
-from multiprocessing import Process, Event
-from typing import List, Optional
 import multiprocessing
-from contextlib import contextmanager
+import os
+import signal
 import threading
 import time
+from contextlib import contextmanager
+from multiprocessing import Event
+from typing import List
 
 import pika
 
 from app.core.config import settings
+from app.core.logger import setup_logging
 from app.ml.classifier_factory import create_classifier
 from app.services.image_organizer import ImageOrganizer
-from app.core.logger import setup_logging
 
 # Configure logging
 logging.basicConfig(level=logging.DEBUG)
@@ -167,7 +166,7 @@ def run_consumer():
                 result = classifier.classify_image(image_data=image_data)
 
                 # Organize the image if path is provided
-                if image_path and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                if image_path and os.path.exists(image_path) and settings.ORGANIZE_IMAGES_INTO_FOLDERS:
                     organization_result = image_organizer.organize_image(
                         image_path,
                         result
