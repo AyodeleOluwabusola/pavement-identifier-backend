@@ -51,7 +51,7 @@ class PavementClassifier:
         self.lock = Lock()
         self.classes = ['asphalt', 'chip-sealed', 'gravel']
         self.model_uri = 'runs:/b76e4133aee04487acedf5708b66d7af/model'
-        self.confidence_threshold = 0.55
+        self.confidence_threshold = 0.9
         self.img_size = (256, 256)
         self.is_ready = Event()
 

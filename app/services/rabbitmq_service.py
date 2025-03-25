@@ -23,6 +23,7 @@ def get_rabbitmq_connection():
         # Set up connection parameters with timeout
         parameters = pika.ConnectionParameters(
             host=RABBITMQ_HOST,
+            port=settings.RABBITMQ_PORT,
             connection_attempts=3,
             retry_delay=1,
             socket_timeout=CONNECTION_TIMEOUT
