@@ -40,7 +40,7 @@ executor = ThreadPoolExecutor(max_workers=settings.RABBITMQ_NUM_PRODUCERS)
 task_status: Dict[str, Any] = {}
 
 # Single instance of classifier shared across the application
-classifier = create_classifier()
+classifier = None
 
 # Global variable to store the consumer manager
 consumer_manager = None
@@ -119,7 +119,18 @@ async def process_startup_directory():
 @app.on_event("startup")
 async def startup_event():
     """Start the initialization in separate threads"""
-    global excel_writer_thread
+    global classifier, excel_writer_thread, consumer_manager
+
+    try:
+        # Initialize classifier
+        classifier = create_classifier()
+        classifier.initialize()
+
+        logger.info("Classifier initialized successfully")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize classifier: {e}")
+        raise
 
     # Start consumer manager
     threading.Thread(target=initialize_consumer_manager, daemon=True).start()

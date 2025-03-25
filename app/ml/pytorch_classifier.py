@@ -77,3 +77,22 @@ class PyTorchPavementClassifier(BasePavementClassifier):
             probs = torch.softmax(outputs, dim=1)
             max_prob, pred_idx = torch.max(probs, dim=1)
             return max_prob.item(), pred_idx.item()
+
+    def shutdown(self):
+        """Clean up PyTorch resources"""
+        try:
+            if self.model is not None:
+                # Clear CUDA cache if using GPU
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+                # Delete model and move to CPU if needed
+                if next(self.model.parameters()).is_cuda:
+                    self.model.cpu()
+                del self.model
+                self.model = None
+
+            self.is_ready.clear()
+            logger.info("PyTorch classifier shutdown completed")
+        except Exception as e:
+            logger.error(f"Error during PyTorch classifier shutdown: {e}")

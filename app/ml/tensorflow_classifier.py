@@ -108,3 +108,17 @@ class TensorFlowPavementClassifier(BasePavementClassifier):
         predicted_class_idx = np.argmax(predictions[0])
         confidence = float(predictions[0][predicted_class_idx])
         return confidence, predicted_class_idx
+
+    def shutdown(self):
+        """Clean up TensorFlow resources"""
+        try:
+            if self.model is not None:
+                # Clear keras backend session
+                tf.keras.backend.clear_session()
+                del self.model
+                self.model = None
+
+            self.is_ready.clear()
+            logger.info("TensorFlow classifier shutdown completed")
+        except Exception as e:
+            logger.error(f"Error during TensorFlow classifier shutdown: {e}")

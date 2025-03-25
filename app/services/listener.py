@@ -13,7 +13,7 @@ import time
 import pika
 
 from app.core.config import settings
-from app.ml.base_classifier import BasePavementClassifier
+from app.ml.classifier_factory import create_classifier
 from app.services.image_organizer import ImageOrganizer
 from app.core.logger import setup_logging
 
@@ -92,24 +92,13 @@ def run_consumer():
                 connection.close()
                 connection = None
 
-class RabbitMQConsumer:
-    def __init__(self, classifier: BasePavementClassifier):
-        self.classifier = classifier
-        self.connection = None
-        self.channel = None
-        self._stopped = False
-        # Use the same queue settings as the producer
-        self.queue_name = settings.QUEUE_NAME
-        self.exchange_name = settings.EXCHANGE_NAME
-        self.routing_key = settings.ROUTING_KEY
-        self.image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)  # Add this if not already present
             process_logger.info("Cleanup completed successfully")
         except Exception as e:
             process_logger.error(f"Error during cleanup: {e}")
 
     try:
         setup_signal_handlers()
-        classifier = PavementClassifier()
+        classifier = create_classifier()
         classifier.initialize()
 
         # Initialize image organizer
@@ -130,30 +119,6 @@ class RabbitMQConsumer:
             )
         )
         channel = connection.channel()
-    def connect(self):
-        """Establish connection to RabbitMQ"""
-        try:
-            # Log connection details
-            logger.info("Consumer connecting to RabbitMQ with settings:")
-            logger.info(f"Host: {settings.RABBITMQ_HOST}")
-            logger.info(f"Port: {settings.RABBITMQ_PORT}")
-            logger.info(f"Virtual Host: {settings.RABBITMQ_VHOST}")
-            logger.info(f"Exchange: {settings.EXCHANGE_NAME}")
-            logger.info(f"Queue: {settings.QUEUE_NAME}")
-            logger.info(f"Routing Key: {settings.ROUTING_KEY}")
-
-            self.connection = pika.BlockingConnection(
-                pika.ConnectionParameters(
-                    host=settings.RABBITMQ_HOST,
-                    port=settings.RABBITMQ_PORT,
-                    credentials=pika.PlainCredentials(
-                        settings.RABBITMQ_USER,
-                        settings.RABBITMQ_PASSWORD
-                    ),
-                    virtual_host=settings.RABBITMQ_VHOST
-                )
-            )
-            self.channel = self.connection.channel()
 
         # Declare exchange and queue
         channel.exchange_declare(
@@ -196,18 +161,6 @@ class RabbitMQConsumer:
                 logger.debug(f"Starting classification for {file_name}")
                 result = classifier.classify_image(image_data=image_data)
 
-            # Organize the image if path is provided
-            logger.info(f"image_path here: {image_path}")
-            # print(f"image_data here: {image_data}")
-            if image_path or image_data and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
-                logger.info(f"Organizing image..., image_path: {image_path}")
-                organization_result = self.image_organizer.organize_image(
-                    image_path,
-                    result
-                )
-                result['organization_result'] = organization_result
-            logger.debug(
-                f"Classification result for {file_name}: {result.get('Status')} (Class: {result.get('Predicted Class')}, Confidence: {result.get('Confidence', 0):.2f})")
                 # Organize the image if path is provided
                 if image_path and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
                     organization_result = image_organizer.organize_image(
@@ -259,7 +212,6 @@ class RabbitMQConsumer:
 
 class ConsumerManager:
     def __init__(self, num_consumers: int = 3):
-    def __init__(self, pavement_classifier: BasePavementClassifier, num_consumers: int = 3):
         self.num_consumers = num_consumers
         self.consumer_processes = []
         self._ready = Event()
@@ -346,7 +298,6 @@ class ConsumerManager:
 
 
 def start_listener(num_consumers: int = 3) -> ConsumerManager:
-def start_listener(classifier: BasePavementClassifier, num_consumers: int = 3) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
         manager = ConsumerManager(num_consumers)
