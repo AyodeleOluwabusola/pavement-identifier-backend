@@ -24,13 +24,19 @@ logger = logging.getLogger(__name__)
 
 def setup_signal_handlers():
     """Setup signal handlers for graceful shutdown"""
+    shutdown_event = threading.Event()
+
     def signal_handler(signum, frame):
-        logger.info(
-            f"Received signal {signum}. Initiating graceful shutdown...")
-        sys.exit(0)
+        if not shutdown_event.is_set():
+            shutdown_event.set()
+            logger.info(
+                f"Received signal {signum}. Initiating graceful shutdown...")
+            # Instead of sys.exit(0), we'll use the event to coordinate shutdown
+            raise SystemExit()
 
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+    return shutdown_event
 
 
 class ProcessManager:
@@ -71,13 +77,13 @@ def run_consumer():
     connection = None
     channel = None
     classifier = None
+    shutdown_event = setup_signal_handlers()
 
     def cleanup():
         nonlocal classifier, channel, connection
         try:
             if classifier:
                 process_logger.info("Shutting down classifier...")
-                # Safely call shutdown if it exists
                 if hasattr(classifier, 'shutdown'):
                     classifier.shutdown()
                 classifier = None
@@ -97,7 +103,6 @@ def run_consumer():
             process_logger.error(f"Error during cleanup: {e}")
 
     try:
-        setup_signal_handlers()
         classifier = create_classifier()
         classifier.initialize()
 
@@ -202,10 +207,18 @@ def run_consumer():
         logger.info(f"Process {os.getpid()} started consuming messages")
         channel.start_consuming()
 
+        while not shutdown_event.is_set():
+            try:
+                connection.process_data_events(timeout=1.0)
+            except Exception as e:
+                if not shutdown_event.is_set():
+                    process_logger.error(f"Error processing messages: {e}")
+                    time.sleep(1)
+
     except (KeyboardInterrupt, SystemExit):
-        logger.info(f"Process {os.getpid()} received shutdown signal")
+        process_logger.info(f"Process {os.getpid()} received shutdown signal")
     except Exception as e:
-        logger.error(f"Process {os.getpid()} failed: {e}")
+        process_logger.error(f"Process {os.getpid()} failed: {e}")
     finally:
         cleanup()
 
@@ -255,16 +268,20 @@ class ConsumerManager:
 
     def stop(self):
         """Stop all consumer processes"""
+        if self._stopped.is_set():
+            return
+
         self._stopped.set()
         self._ready.clear()
 
+        logger.info("Initiating graceful shutdown of consumer processes...")
+
         # First attempt graceful shutdown
-        for process in self.consumer_processes[:]:  # Create a copy of the list
+        for process in self.consumer_processes[:]:
             if process.is_alive():
                 try:
                     os.kill(process.pid, signal.SIGTERM)
                 except ProcessLookupError:
-                    self.consumer_processes.remove(process)
                     continue
 
         # Wait for processes to finish
@@ -283,13 +300,12 @@ class ConsumerManager:
                     process.join(timeout=settings.PROCESS_SHUTDOWN_TIMEOUT)
                     if process.is_alive():
                         os.kill(process.pid, signal.SIGKILL)
-                except (ProcessLookupError, OSError):
+                except (OSError, ProcessLookupError):
                     pass
-                finally:
-                    self.consumer_processes.remove(process)
 
         # Clean up resources
         self.process_manager.cleanup_resources()
+        self.consumer_processes.clear()
         logger.info("Consumer manager stopped and resources cleaned up")
 
     def is_ready(self) -> bool:

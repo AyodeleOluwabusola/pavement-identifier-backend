@@ -44,7 +44,8 @@ class BasePavementClassifier(ABC):
 
                 # Create new connection if needed
                 if self._connection is None or not self._connection.is_open:
-                    self._connection = get_rabbitmq_connection()
+                    self._connection = get_rabbitmq_connection(
+                        use_context_manager=False)
 
                 # Create new channel if needed
                 if self._channel is None or not self._channel.is_open:
