@@ -17,15 +17,38 @@ logger = setup_logging(__name__)
 
 
 class HighPerformanceWriter:
-    def __init__(self, output_path: Path, batch_size: int, flush_interval: int):
-        self.output_path = output_path
+    def __init__(self, output_path: Path, batch_size: int = 1000, flush_interval: int = 30):
+        self.output_path = Path(output_path)  # Ensure it's a Path object
         self.batch_size = batch_size
         self.flush_interval = flush_interval
         self.buffer = []
         self.lock = Lock()
         self.stop_event = threading.Event()
+
+        # Create parent directories if they don't exist
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create initial Excel file if it doesn't exist
+        self._create_initial_file()
+
         self.thread = threading.Thread(target=self._flush_buffer)
         self.thread.start()
+
+    def _create_initial_file(self):
+        """Create initial Excel file with headers if it doesn't exist"""
+        if not self.output_path.exists():
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.title = "Image Processing Results"
+            sheet.append(
+                ["File Name", "Status", "Predicted Class", "Confidence"])
+
+            try:
+                workbook.save(self.output_path)
+                logger.info(f"Created new Excel file at {self.output_path}")
+            except Exception as e:
+                logger.error(f"Failed to create initial Excel file: {e}")
+                raise
 
     def write(self, data: Dict[str, Any]):
         with self.lock:
@@ -35,29 +58,65 @@ class HighPerformanceWriter:
 
     def _flush(self):
         if self.buffer:
-            self._save_to_excel(self.buffer)
-            self.buffer.clear()
+            try:
+                self._save_to_excel(self.buffer)
+                self.buffer.clear()
+            except Exception as e:
+                logger.error(f"Error during flush: {e}")
 
     def _save_to_excel(self, data: List[Dict[str, Any]]):
-        try:
-            workbook = load_workbook(self.output_path)
-        except InvalidFileException:
-            workbook = Workbook()
-            sheet = workbook.active
-            sheet.title = "Image Processing Results"
-            sheet.append(
-                ["File Name", "Status", "Predicted Class", "Confidence"])
+        max_retries = 3
+        current_retry = 0
 
-        sheet = workbook.active
-        for item in data:
-            sheet.append([
-                item.get('file_name', 'Unknown'),
-                item.get('status', 'Error'),
-                item.get('predicted_class', 'Unknown'),
-                item.get('confidence', 0.0)
-            ])
+        while current_retry < max_retries:
+            try:
+                # Try to load existing workbook
+                try:
+                    workbook = load_workbook(self.output_path)
+                except FileNotFoundError:
+                    # If file doesn't exist, create new workbook
+                    workbook = Workbook()
+                    sheet = workbook.active
+                    sheet.title = "Image Processing Results"
+                    sheet.append(
+                        ["File Name", "Status", "Predicted Class", "Confidence"])
+                except InvalidFileException:
+                    # If file is corrupted, create new workbook
+                    workbook = Workbook()
+                    sheet = workbook.active
+                    sheet.title = "Image Processing Results"
+                    sheet.append(
+                        ["File Name", "Status", "Predicted Class", "Confidence"])
 
-        workbook.save(self.output_path)
+                sheet = workbook.active
+
+                # Append new data
+                for item in data:
+                    sheet.append([
+                        item.get('file_name', 'Unknown'),
+                        item.get('status', 'Error'),
+                        item.get('predicted_class', 'Unknown'),
+                        item.get('confidence', 0.0)
+                    ])
+
+                # Save with error handling
+                try:
+                    workbook.save(self.output_path)
+                    break  # Success, exit retry loop
+                except PermissionError:
+                    logger.warning(
+                        f"Permission error while saving, retry {current_retry + 1}")
+                    time.sleep(1)  # Wait before retry
+                    current_retry += 1
+                except Exception as e:
+                    logger.error(f"Error saving workbook: {e}")
+                    raise
+
+            except Exception as e:
+                logger.error(f"Error in _save_to_excel: {e}")
+                current_retry += 1
+                if current_retry >= max_retries:
+                    raise
 
     def _flush_buffer(self):
         while not self.stop_event.is_set():
