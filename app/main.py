@@ -2,7 +2,6 @@ import asyncio
 import base64
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Any
 
 from fastapi import FastAPI, BackgroundTasks, HTTPException
@@ -31,8 +30,6 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
-# Create a ThreadPoolExecutor with a reasonable number of workers
-executor = ThreadPoolExecutor(max_workers=settings.RABBITMQ_NUM_PRODUCERS)
 
 # Store background task status
 task_status: Dict[str, Any] = {}
@@ -120,10 +117,15 @@ async def startup_event():
     global classifier, excel_writer_thread, consumer_manager
 
     try:
+        # Setup RabbitMQ queues
+        from app.services.rabbitmq_service import setup_rabbitmq_queues
+        if not setup_rabbitmq_queues():
+            logger.error("Failed to setup RabbitMQ queues")
+            raise RuntimeError("RabbitMQ queue setup failed")
+
         # Initialize classifier
         classifier = create_classifier()
         classifier.initialize()
-
         logger.info("Classifier initialized successfully")
 
     except Exception as e:

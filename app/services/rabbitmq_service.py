@@ -97,3 +97,49 @@ def publish_message(message: dict) -> bool:
     except Exception as e:
         logger.error(f"Unexpected error while publishing message: {e}")
         return False
+
+
+def setup_rabbitmq_queues():
+    """Setup all required RabbitMQ queues and exchanges"""
+    try:
+        with get_rabbitmq_connection() as connection:
+            channel = connection.channel()
+
+            # Setup main exchange and queue
+            channel.exchange_declare(
+                exchange=EXCHANGE_NAME,
+                exchange_type='direct',
+                durable=True
+            )
+            channel.queue_declare(
+                queue=QUEUE_NAME,
+                durable=True
+            )
+            channel.queue_bind(
+                exchange=EXCHANGE_NAME,
+                queue=QUEUE_NAME,
+                routing_key=ROUTING_KEY
+            )
+
+            # Setup results exchange and queue
+            channel.exchange_declare(
+                exchange=settings.RESULTS_EXCHANGE_NAME,
+                exchange_type='direct',
+                durable=True
+            )
+            channel.queue_declare(
+                queue=settings.RESULTS_QUEUE_NAME,
+                durable=True
+            )
+            channel.queue_bind(
+                exchange=settings.RESULTS_EXCHANGE_NAME,
+                queue=settings.RESULTS_QUEUE_NAME,
+                routing_key=settings.RESULTS_ROUTING_KEY
+            )
+
+            logger.info("Successfully set up RabbitMQ queues and exchanges")
+            return True
+
+    except Exception as e:
+        logger.error(f"Failed to setup RabbitMQ queues: {e}")
+        return False
