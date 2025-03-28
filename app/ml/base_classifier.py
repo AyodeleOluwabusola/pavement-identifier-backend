@@ -70,7 +70,8 @@ class BasePavementClassifier(ABC):
             "file_name": file_name,
             "status": result.get('Status', 'Error'),
             "predicted_class": result.get('Predicted Class', 'Unknown'),
-            "confidence": result.get('Confidence', 0.0)
+            "confidence": result.get('Confidence', 0.0),
+            "image_path": result.get('image_path', "Unknown")
         }
 
         max_retries = 3

@@ -39,8 +39,9 @@ class HighPerformanceWriter:
             workbook = Workbook()
             sheet = workbook.active
             sheet.title = "Image Processing Results"
-            sheet.append(
-                ["File Name", "Status", "Predicted Class", "Confidence"])
+            sheet.append([
+                "File Name", "Status", "Predicted Class", "Confidence", "Original Image Path"
+            ])
 
             try:
                 workbook.save(self.output_path)
@@ -72,20 +73,17 @@ class HighPerformanceWriter:
                 # Try to load existing workbook
                 try:
                     workbook = load_workbook(self.output_path)
-                except FileNotFoundError:
-                    # If file doesn't exist, create new workbook
+                except (FileNotFoundError, InvalidFileException):
                     workbook = Workbook()
                     sheet = workbook.active
                     sheet.title = "Image Processing Results"
-                    sheet.append(
-                        ["File Name", "Status", "Predicted Class", "Confidence"])
-                except InvalidFileException:
-                    # If file is corrupted, create new workbook
-                    workbook = Workbook()
-                    sheet = workbook.active
-                    sheet.title = "Image Processing Results"
-                    sheet.append(
-                        ["File Name", "Status", "Predicted Class", "Confidence"])
+                    sheet.append([
+                        "File Name",
+                        "Image Path",
+                        "Status",
+                        "Predicted Class",
+                        "Confidence"
+                    ])
 
                 sheet = workbook.active
 
@@ -95,17 +93,16 @@ class HighPerformanceWriter:
                         item.get('file_name', 'Unknown'),
                         item.get('status', 'Error'),
                         item.get('predicted_class', 'Unknown'),
-                        item.get('confidence', 0.0)
+                        item.get('confidence', 0.0),
+                        item.get('image_path', 'Unknown')
                     ])
 
-                # Save with error handling
                 try:
                     workbook.save(self.output_path)
-                    break  # Success, exit retry loop
+                    break
                 except PermissionError:
-                    logger.warning(
-                        f"Permission error while saving, retry {current_retry + 1}")
-                    time.sleep(1)  # Wait before retry
+                    logger.warning(f"Permission error while saving, retry {current_retry + 1}")
+                    time.sleep(1)
                     current_retry += 1
                 except Exception as e:
                     logger.error(f"Error saving workbook: {e}")
@@ -175,7 +172,7 @@ class ExcelWriterManager:
                     thread_logger.info("Received message from results queue")
                     data = json.loads(body)
                     thread_logger.info(
-                        f"Processing message for file: {data.get('file_name')}")
+                        f"Processing message for file: {data}")
 
                     success = self.shared_writer.write_result(data)
 

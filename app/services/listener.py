@@ -175,6 +175,7 @@ def run_consumer():
 
                 # Publish result to queue
                 if file_name and result:
+                    result['image_path'] = image_path
                     classifier.publish_result(file_name, result)
 
                 # Log classification results
