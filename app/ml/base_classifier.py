@@ -158,7 +158,7 @@ class BasePavementClassifier(ABC):
             with self.lock:
                 confidence, predicted_class_idx = self.run_inference(img_data)
 
-            status = "Success" if confidence >= self.confidence_threshold else "Uncertain"
+            status = "Success" if confidence >= 0 else "Uncertain"
             predicted_class = self.classes[predicted_class_idx] if confidence >= self.confidence_threshold else "Uncertain"
 
             result = {
