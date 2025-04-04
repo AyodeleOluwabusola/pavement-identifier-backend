@@ -11,15 +11,27 @@ import threading
 import time
 
 import pika
+import prometheus_client
+from prometheus_client import multiprocess
+from prometheus_client import CollectorRegistry, generate_latest
 
-from app.core.config import settings
+from app.core.logger import setup_logging
+from app.core.config import settings  # Update this import
+from app.core.metrics import (
+    CLASSIFICATION_DISTRIBUTION,
+    CLASSIFICATION_LATENCY,
+    CLASSIFICATION_REQUESTS,
+    PROCESS_MODEL_STATUS,
+    ACTIVE_CLASSIFICATIONS,
+    PROCESS_LAST_HEARTBEAT,
+    ACTIVE_PROCESSES,
+    clear_process_metrics
+)
 from app.ml.classifier_factory import create_classifier
 from app.services.image_organizer import ImageOrganizer
-from app.core.logger import setup_logging
 
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
+# Initialize logger using setup_logging
+logger = setup_logging(__name__)
 
 
 def setup_signal_handlers():
@@ -47,6 +59,11 @@ class ProcessManager:
         self._lock = threading.Lock()
         self._shutdown_event = threading.Event()
 
+        # Configure prometheus multiprocess mode
+        os.environ["PROMETHEUS_MULTIPROC_DIR"] = "/tmp/prometheus_multiproc"
+        if not os.path.exists("/tmp/prometheus_multiproc"):
+            os.makedirs("/tmp/prometheus_multiproc")
+
     def add_process(self, process: multiprocessing.Process):
         with self._lock:
             self._processes.append(process)
@@ -59,24 +76,34 @@ class ProcessManager:
     def cleanup_resources(self):
         """Clean up any remaining resources"""
         try:
+            # Clean up prometheus multiprocess files
+            multiprocess.mark_process_dead(process_number)
+
             # Get the internal resource tracker module
             resource_tracker = multiprocessing.resource_tracker._resource_tracker
             if resource_tracker is not None:
-                # Clear the resource tracker's internal state
                 resource_tracker._resource_tracker = None
                 resource_tracker._pid = None
         except Exception as e:
             logger.error(f"Error cleaning up resources: {e}")
 
 
-def run_consumer():
+def run_consumer(process_number: str):
     """Function to run in each consumer process"""
-    process_logger = setup_logging(f"consumer_process_{os.getpid()}")
-    process_logger.info(f"Starting consumer process with PID: {os.getpid()}")
+    process_logger = setup_logging(f"consumer_process_{process_number}")
+    process_logger.info(f"Starting consumer process number: {process_number}")
 
-    connection = None
-    channel = None
-    classifier = None
+    # Clear any existing metrics for this process number first
+    PROCESS_MODEL_STATUS.labels(
+        process_id=process_number).set(-1)  # Reset to error state
+    ACTIVE_CLASSIFICATIONS.labels(process_id=process_number).set(0)
+    PROCESS_LAST_HEARTBEAT.labels(process_id=process_number).set(time.time())
+
+    # Now set initial state
+    PROCESS_MODEL_STATUS.labels(
+        process_id=process_number).set(0)  # 0 = initializing
+    ACTIVE_PROCESSES.inc()
+
     shutdown_event = setup_signal_handlers()
 
     def cleanup():
@@ -102,9 +129,22 @@ def run_consumer():
         except Exception as e:
             process_logger.error(f"Error during cleanup: {e}")
 
+    @contextmanager
+    def track_active_classification():
+        """Context manager to track active classifications"""
+        ACTIVE_CLASSIFICATIONS.labels(process_id=process_number).inc()
+        try:
+            yield
+        finally:
+            ACTIVE_CLASSIFICATIONS.labels(process_id=process_number).dec()
+
     try:
         classifier = create_classifier()
         classifier.initialize()
+
+        # Update model status to ready
+        PROCESS_MODEL_STATUS.labels(
+            process_id=process_number).set(1)  # 1 = ready
 
         # Initialize image organizer
         image_organizer = ImageOrganizer(settings.CATEGORIZED_IMAGES_DIR)
@@ -144,12 +184,18 @@ def run_consumer():
 
         def process_message(ch, method, properties, body):
             try:
+                # Update heartbeat
+                PROCESS_LAST_HEARTBEAT.labels(
+                    process_id=process_number).set(time.time())
+
                 # Log message received
                 logger.info("Received message from RabbitMQ queue")
 
                 # Check if classifier is ready
                 if not classifier.is_ready.is_set():
                     logger.warning("Classifier not ready, rejecting message")
+                    PROCESS_MODEL_STATUS.labels(
+                        process_id=process_number).set(0)
                     ch.basic_reject(
                         delivery_tag=method.delivery_tag, requeue=True)
                     return
@@ -162,28 +208,32 @@ def run_consumer():
 
                 logger.info(f"Processing message for file: {file_name}")
 
-                # Classify the image
-                logger.debug(f"Starting classification for {file_name}")
-                result = classifier.classify_image(image_data=image_data)
+                # Use the context manager to ensure proper tracking
+                with track_active_classification():
+                    logger.debug(f"Starting classification for {file_name}")
+                    result = classifier.classify_image(image_data=image_data)
 
-                # Organize the image if path is provided
-                if image_path and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
-                    organization_result = image_organizer.organize_image(
-                        image_path,
-                        result
-                    )
-                    result['organization_result'] = organization_result
+                    # Record classification result
+                    if result.get('Status') == 'Success':
+                        CLASSIFICATION_REQUESTS.labels(status="success").inc()
+                        CLASSIFICATION_DISTRIBUTION.labels(
+                            predicted_class=result.get(
+                                'Predicted Class', 'unknown').lower()
+                        ).inc()
+                    else:
+                        CLASSIFICATION_REQUESTS.labels(status="error").inc()
 
-                # Publish result to queue
-                if file_name and result:
-                    classifier.publish_result(file_name, result)
+                    # Organize the image if path is provided
+                    if image_path and os.path.exists(image_path) and settings.ORGANIZED_IMAGES_INTO_FOLDERS:
+                        organization_result = image_organizer.organize_image(
+                            image_path,
+                            result
+                        )
+                        result['organization_result'] = organization_result
 
-                # Log classification results
-                logger.info(
-                    f"Processed {file_name}: "
-                    f"Class={result.get('Predicted Class', 'unknown')}, "
-                    f"Confidence={result.get('Confidence', 0):.2f}"
-                )
+                    # Publish result to queue
+                    if file_name and result:
+                        classifier.publish_result(file_name, result)
 
                 # Acknowledge message
                 ch.basic_ack(delivery_tag=method.delivery_tag)
@@ -204,7 +254,7 @@ def run_consumer():
             on_message_callback=process_message
         )
 
-        logger.info(f"Process {os.getpid()} started consuming messages")
+        logger.info(f"Process {process_number} started consuming messages")
         channel.start_consuming()
 
         while not shutdown_event.is_set():
@@ -215,11 +265,18 @@ def run_consumer():
                     process_logger.error(f"Error processing messages: {e}")
                     time.sleep(1)
 
-    except (KeyboardInterrupt, SystemExit):
-        process_logger.info(f"Process {os.getpid()} received shutdown signal")
+    except (KeyboardInterrupt):
+        process_logger.info(
+            f"Process {process_number} received shutdown signal")
     except Exception as e:
-        process_logger.error(f"Process {os.getpid()} failed: {e}")
+        process_logger.error(f"Process {process_number} failed: {e}")
+        PROCESS_MODEL_STATUS.labels(
+            process_id=process_number).set(-1)  # -1 = error
     finally:
+        # Cleanup metrics
+        PROCESS_MODEL_STATUS.labels(process_id=process_number).set(-1)
+        ACTIVE_CLASSIFICATIONS.labels(process_id=process_number).set(0)
+        ACTIVE_PROCESSES.dec()
         cleanup()
 
 
@@ -232,10 +289,13 @@ class ConsumerManager:
         self.process_manager = ProcessManager()
 
     @contextmanager
-    def _managed_process(self, target_func, *args, **kwargs):
+    def _managed_process(self, target_func, process_number, *args, **kwargs):
         """Context manager for process lifecycle management"""
         process = multiprocessing.Process(
-            target=target_func, args=args, kwargs=kwargs)
+            target=target_func,
+            args=(process_number, *args),
+            kwargs=kwargs
+        )
         process.daemon = False
 
         try:
@@ -252,10 +312,12 @@ class ConsumerManager:
                 if self._stopped.is_set():
                     break
 
-                with self._managed_process(run_consumer) as process:
+                # Convert to string for consistency
+                process_number = str(i + 1)
+                with self._managed_process(run_consumer, process_number) as process:
                     self.consumer_processes.append(process)
                     logger.info(
-                        f"Started consumer process {i+1} with PID {process.pid}")
+                        f"Started consumer process {process_number} with PID {process.pid}")
 
             if self.consumer_processes and not self._stopped.is_set():
                 self._ready.set()
@@ -277,10 +339,13 @@ class ConsumerManager:
         logger.info("Initiating graceful shutdown of consumer processes...")
 
         # First attempt graceful shutdown
-        for process in self.consumer_processes[:]:
+        for i, process in enumerate(self.consumer_processes[:]):
             if process.is_alive():
                 try:
+                    process_number = str(i + 1)
                     os.kill(process.pid, signal.SIGTERM)
+                    # Clear metrics immediately
+                    clear_process_metrics(process_number)
                 except ProcessLookupError:
                     continue
 
@@ -296,10 +361,13 @@ class ConsumerManager:
         for process in self.consumer_processes[:]:
             if process.is_alive():
                 try:
+                    pid = str(process.pid)
                     process.terminate()
                     process.join(timeout=settings.PROCESS_SHUTDOWN_TIMEOUT)
                     if process.is_alive():
                         os.kill(process.pid, signal.SIGKILL)
+                    # Ensure metrics are cleaned up
+                    clear_process_metrics(pid)
                 except (OSError, ProcessLookupError):
                     pass
 
@@ -313,12 +381,12 @@ class ConsumerManager:
         return self._ready.is_set() and any(process.is_alive() for process in self.consumer_processes)
 
 
-def start_listener(num_consumers: int = 3) -> ConsumerManager:
+def start_listener(num_consumers: int = settings.RABBITMQ_NUM_CONSUMERS) -> ConsumerManager:
     """Start the listener with multiple consumers"""
     try:
         manager = ConsumerManager(num_consumers)
         manager.start()
-        logger.info("Started consumer manager")
+        logger.info(f"Started consumer manager with {num_consumers} consumers")
         return manager
     except Exception as e:
         logger.error(f"Critical error in listener: {e}")

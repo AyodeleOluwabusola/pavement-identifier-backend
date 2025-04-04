@@ -7,6 +7,10 @@ from typing import Dict, Any
 from fastapi import FastAPI, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from prometheus_client import make_asgi_app, multiprocess
+from prometheus_client import CollectorRegistry
+from contextlib import contextmanager
+import time
 
 from app.batch import process_images_from_dir
 from app.core.config import settings
@@ -15,6 +19,12 @@ from app.ml.classifier_factory import create_classifier
 from app.services.listener import start_listener
 from app.services.rabbitmq_service import publish_message
 from app.services.excel_writer_service import run_excel_writer
+from app.core.metrics import (
+    CLASSIFICATION_REQUESTS,
+    CLASSIFICATION_LATENCY,
+    CLASSIFICATION_DISTRIBUTION,
+    record_classification_result
+)
 from io import BytesIO
 from PIL import Image
 
@@ -32,6 +42,30 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+# Create prometheus multiprocess directory if it doesn't exist
+prometheus_multiproc_dir = "/tmp/prometheus_multiproc"
+if not os.path.exists(prometheus_multiproc_dir):
+    os.makedirs(prometheus_multiproc_dir)
+
+# Set the environment variable
+os.environ["PROMETHEUS_MULTIPROC_DIR"] = prometheus_multiproc_dir
+
+# Initialize registry with multiprocess collector
+registry = CollectorRegistry()
+multiprocess.MultiProcessCollector(registry)
+
+# Add prometheus metrics endpoint
+metrics_app = make_asgi_app(registry=registry)
+app.mount("/metrics", metrics_app)
+
+
+@contextmanager
+def track_classification_time():
+    start_time = time.time()
+    try:
+        yield
+    finally:
+        CLASSIFICATION_LATENCY.observe(time.time() - start_time)
 
 # Store background task status
 task_status: Dict[str, Any] = {}
@@ -119,10 +153,22 @@ async def startup_event():
     global classifier, excel_writer_thread, consumer_manager
 
     try:
-        # Setup RabbitMQ queues
+        # Setup RabbitMQ queues with retries
         from app.services.rabbitmq_service import setup_rabbitmq_queues
-        if not setup_rabbitmq_queues():
-            logger.error("Failed to setup RabbitMQ queues")
+        retry_count = 0
+        max_retries = 5
+        while retry_count < max_retries:
+            if setup_rabbitmq_queues():
+                break
+            retry_count += 1
+            if retry_count < max_retries:
+                logger.warning(
+                    f"Retrying RabbitMQ setup ({retry_count}/{max_retries})")
+                time.sleep(5)  # Wait 5 seconds before retrying
+
+        if retry_count == max_retries:
+            logger.error(
+                "Failed to setup RabbitMQ queues after maximum retries")
             raise RuntimeError("RabbitMQ queue setup failed")
 
         # Initialize classifier
@@ -386,34 +432,21 @@ async def classify_single_image(request: ImageRequest):
         # Clean base64 string by removing data URL prefix if it exists
         image_data = request.image_data
         if image_data.startswith('data:'):
-            # Remove the prefix (handles any image type, not just jpeg)
             image_data = image_data.split(',', 1)[1]
 
         # Classify the image with cleaned base64 data
-        result = classifier.classify_image(image_data=image_data)
+        with track_classification_time():
+            result = classifier.classify_image(image_data=image_data)
 
-        if result.get('Status') == 'Error':
-            raise HTTPException(
-                status_code=400,
-                detail=result.get('Message', 'Error processing image')
-            )
+            # Record metrics
+            if result.get('Status') == 'Success':
+                CLASSIFICATION_REQUESTS.labels(status="success").inc()
+                record_classification_result(result.get('Predicted Class'))
+            else:
+                CLASSIFICATION_REQUESTS.labels(status="error").inc()
+                record_classification_result('uncertain')
 
-        # Return classification results
-        return {
-            'status': 'success',
-            'file_name': request.file_name,
-            'classification': {
-                'class': result.get('Predicted Class'),
-                'confidence': result.get('Confidence'),
-                'status': result.get('Status')
-            }
-        }
-
-    except HTTPException:
-        raise
+            return result
     except Exception as e:
-        logger.error(f"Error processing image: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Internal server error: {str(e)}"
-        )
+        CLASSIFICATION_REQUESTS.labels(status="error").inc()
+        raise

@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str
     AWS_DEFAULT_REGION: str
 
+    # Prometheus Settings
+    PROMETHEUS_MULTIPROC_DIR: str = "/tmp/prometheus_multiproc"
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

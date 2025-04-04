@@ -7,6 +7,12 @@ from tqdm import tqdm
 
 from app.services.file_service import read_image
 from app.services.rabbitmq_service import publish_message
+from app.core.metrics import (
+    CLASSIFICATION_REQUESTS,
+    QUEUE_MESSAGES_PUBLISHED,
+    CLASSIFICATION_DISTRIBUTION,
+    CLASSIFICATION_LATENCY
+)
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -21,6 +27,7 @@ def process_single_image(file_path: str, image_file: str) -> Dict[str, Any]:
 
         if not encoded_image:
             logger.error(f"Failed to read image: {image_file}")
+            CLASSIFICATION_REQUESTS.labels(status="error").inc()
             return {"file": image_file, "status": "failed", "error": "Failed to read image"}
 
         # Publish the base64 encoded image to RabbitMQ
@@ -32,6 +39,7 @@ def process_single_image(file_path: str, image_file: str) -> Dict[str, Any]:
 
         if publish_message(message):
             logger.info(f"Successfully published: {image_file}")
+            QUEUE_MESSAGES_PUBLISHED.inc()  # Verify this line exists
             return {"file": image_file, "status": "success"}
         else:
             logger.error(f"Failed to publish: {image_file}")
